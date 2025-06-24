@@ -18,12 +18,10 @@ from typing import List, Tuple
 class ElectricalPriceCalc(ad.ADBase):
 
     def initialize(self):
-
         self.ADapi = self.get_ad_api()
 
+        # Detect country and initialize holidays
         self.country_code = None
-        self.currency:str = ''
-
         if 'country_code' in self.args:
             self.country_code = self.args['country_code']
         elif 'latitude' in self.config and 'longitude' in self.config:
@@ -36,7 +34,6 @@ class ElectricalPriceCalc(ad.ADBase):
                 self.ADapi.log(f"Failed to get country code from geolocation: {e}", level='ERROR')
 
         if self.country_code is not None:
-            # Initialize holidays for the detected country (default to Sweden if not found)
             try:
                 holiday_class = getattr(holidays, self.country_code.upper())
                 self.holidays = holiday_class(years=[datetime.date.today().year, datetime.date.today().year + 1])
@@ -44,6 +41,7 @@ class ElectricalPriceCalc(ad.ADBase):
                 self.ADapi.log(f"Could not find holidays for {self.country_code}, defaulting to Norway.", level = 'INFO')
                 self.holidays = holidays.Norway(years=[datetime.date.today().year, datetime.date.today().year + 1])
 
+        # Set up prices and taxes
         self.daytax:float = self.args.get('daytax',0)
         self.nighttax:float = self.args.get('nighttax',0)
         self.power_support_above:float = self.args.get('power_support_above', 10)
@@ -67,7 +65,7 @@ class ElectricalPriceCalc(ad.ADBase):
         elif 'nordpool' in self.args:
             self.nordpool_prices = self.args['nordpool']
             self._fetchNordpoolPrices(0)
-            self.ADapi.listen_state(self.update_price_rundaily, self.nordpool_prices,
+            self.ADapi.listen_state(self._update_price_rundaily, self.nordpool_prices,
                 attribute = 'tomorrow'
             )
         else:
@@ -76,15 +74,18 @@ class ElectricalPriceCalc(ad.ADBase):
                 if 'nordpool' in sensor_id:
                     self.nordpool_prices = sensor_id
                     self._fetchNordpoolPrices(0)
-                    self.ADapi.listen_state(self.update_price_rundaily, self.nordpool_prices,
+                    self.ADapi.listen_state(self._update_price_rundaily, self.nordpool_prices,
                         attribute = 'tomorrow'
                     )
                     break
 
 
+
+    def _update_price_rundaily(self, entity, attribute, old, new, kwargs) -> None:
+        self._fetchNordpoolPrices(0)
+
+    # Fetch Nordpool prices with elspot
     def _fetchNordpoolSpotPrices(self, kwargs) -> None:
-        """ Fetches prices from the Nordpool library and adds day and night tax.
-        """
         nordpool_todays_prices:list = []
         nordpool_tomorrow_prices:list = []
         try:
@@ -105,7 +106,7 @@ class ElectricalPriceCalc(ad.ADBase):
                 resolution=15
             )
         except Exception as e:
-            self.ADapi.log(f"Nordpool prices today failed. Exception: {e}", level = 'DEBUG')
+            self.ADapi.log(f"Nordpool prices tomorrow failed. Exception: {e}", level = 'DEBUG')
             self.ADapi.run_in(self._fetchNordpoolSpotPrices, 1800)
         else:
             if tomorrow_prices is not None:
@@ -125,6 +126,46 @@ class ElectricalPriceCalc(ad.ADBase):
             item['end'] = item['end'].astimezone(local_tz)
         return nordpool_prices
 
+    # Fetch Nordpool prices with Home Assistant integration
+    def _fetchNordpoolPrices(self, kwargs) -> None:
+        nordpool_todays_prices:list = []
+        nordpool_tomorrow_prices:list = []
+
+        # Todays prices
+        try:
+            todays_prices = self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'raw_today')
+        except Exception as e:
+            self.ADapi.log(f"Nordpool prices today failed. Exception: {e}", level = 'DEBUG')
+            self.ADapi.run_in(self._fetchNordpoolPrices, 1800)
+            return
+        else:
+            nordpool_todays_prices = self._correctDictsNordpoolIntegrationPrices(nordpool_prices = todays_prices)
+
+        # Tomorrows prices if available
+        if self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'tomorrow_valid'):
+            try:
+                tomorrow_prices = self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'raw_tomorrow')
+            except IndexError as ie:
+                self.ADapi.log(f"Failed to get tomorrows prices. Index Error: {ie}", level = 'WARNING')
+            except Exception as e:
+                self.ADapi.log(f"Nordpool prices tomorrow failed. Exception: {e}", level = 'WARNING')
+            else:
+                if (
+                    len(tomorrow_prices) > 0
+                    and todays_prices != tomorrow_prices
+                ):
+                    nordpool_tomorrow_prices = self._correctDictsNordpoolIntegrationPrices(nordpool_prices = tomorrow_prices)
+
+        self._calculatePrices(nordpool_todays_prices = nordpool_todays_prices,
+                              nordpool_tomorrow_prices = nordpool_tomorrow_prices)
+
+    def _correctDictsNordpoolIntegrationPrices(self, nordpool_prices):
+        for item in nordpool_prices:
+            item['start'] = self.ADapi.convert_utc(item['start'])
+            item['end'] = self.ADapi.convert_utc(item['end'])
+        return nordpool_prices
+
+    # Calculates taxes and adjusts datetime
     def _calculatePrices(self,
                          nordpool_todays_prices,
                          nordpool_tomorrow_prices):
@@ -189,58 +230,12 @@ class ElectricalPriceCalc(ad.ADBase):
         sorted_elprices = sorted(sorted_elprices)
         return nordpool_prices, sorted_elprices
 
-    def update_price_rundaily(self, entity, attribute, old, new, kwargs) -> None:
-        """ Calls fetchNordpoolPrices() on sensor change.
-        """
-        self._fetchNordpoolPrices(0)
-
-
-    def _fetchNordpoolPrices(self, kwargs) -> None:
-        """ Fetches prices from Nordpool sensor and adds day and night tax.
-        """
-        nordpool_todays_prices:list = []
-        nordpool_tomorrow_prices:list = []
-
-        # Todays prices
-        try:
-            todays_prices = self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'raw_today')
-        except Exception as e:
-            self.ADapi.log(f"Nordpool prices today failed. Exception: {e}", level = 'DEBUG')
-            self.ADapi.run_in(self._fetchNordpoolPrices, 1800)
-            return
-        else:
-            nordpool_todays_prices = self._correctDictsNordpoolIntegrationPrices(nordpool_prices = todays_prices)
-
-        # Tomorrows prices if available
-        if self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'tomorrow_valid'):
-            try:
-                tomorrow_prices = self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'raw_tomorrow')
-            except IndexError as ie:
-                self.ADapi.log(f"Failed to get tomorrows prices. Index Error: {ie}", level = 'WARNING')
-            except Exception as e:
-                self.ADapi.log(f"Nordpool prices tomorrow failed. Exception: {e}", level = 'WARNING')
-            else:
-                if (
-                    len(tomorrow_prices) > 0
-                    and todays_prices != tomorrow_prices
-                ):
-                    nordpool_tomorrow_prices = self._correctDictsNordpoolIntegrationPrices(nordpool_prices = tomorrow_prices)
-
-        self._calculatePrices(nordpool_todays_prices = nordpool_todays_prices,
-                              nordpool_tomorrow_prices = nordpool_tomorrow_prices)
-
-    def _correctDictsNordpoolIntegrationPrices(self, nordpool_prices):
-        for item in nordpool_prices:
-            item['start'] = self.ADapi.convert_utc(item['start'])
-            item['end'] = self.ADapi.convert_utc(item['end'])
-        return nordpool_prices
-
     def getContinuousCheapestTime(self,
                                   hoursTotal:float,
                                   calculateBeforeNextDayPrices:bool,
                                   finishByHour:int
                                   ) -> Tuple[datetime, datetime, float]:
-        """ Returns starttime, endtime and price for cheapest continuous hours with different options depenting on time the call was made.
+        """ Returns starttime, endtime and price for cheapest continuous hours with different results depenting on time the call was made.
         """
         indexesToFinish = math.ceil(hoursTotal / 24 * self.todayslength)
         if indexesToFinish == 0:
@@ -323,16 +318,14 @@ class ElectricalPriceCalc(ad.ADBase):
                       pricedifference_increase: float,
                       reset_continuous_hours: bool,
                       prev_peak_hours: list
-                      ) -> Tuple[datetime.timedelta, datetime, list]:
-        """Finds peak variations in electricity price for saving purposes and returns list with datetime objects,
-           int with continuous hours off, and int with hour turned back on for when to save.
+                      ) -> list:
+        """Finds peak variations in electricity price for saving purposes and returns list with datetime objects;
+           'start', 'end' and 'duration' as a timedelta object for how long the electricity has been off.
         """
         checkTime = self.ADapi.datetime(aware=True).replace(minute=0, second=0, microsecond=0)
         start_times = [item['start'] for item in self.elpricestoday]
-        #end_times = [item['end'] for item in self.elpricestoday] ###
-
         index_now = bisect.bisect_left(start_times, checkTime)
-        #index_end = bisect.bisect_right(end_times, finishAt) ###
+
         peak_hours:list = []
         continuous_hours_from_old_calc = 0
 
@@ -341,7 +334,6 @@ class ElectricalPriceCalc(ad.ADBase):
             and prev_peak_hours
         ):
             peak_hours, continuous_hours_from_old_calc = self._keep_already_calculated_save_hours(
-                index_now = index_now,
                 prev_peak_hours = prev_peak_hours,
                 reset_continuous_hours = reset_continuous_hours,
                 continuous_hours_from_old_calc = continuous_hours_from_old_calc,
@@ -375,7 +367,7 @@ class ElectricalPriceCalc(ad.ADBase):
             peak_list = self._putPeaksInOrder(peak_hours)
             return peak_list
         else:
-            return datetime.timedelta(0), None, []
+            return []
 
     def findLowPriceHours(self,
                           priceincrease:float
@@ -448,7 +440,6 @@ class ElectricalPriceCalc(ad.ADBase):
         return peak_list
 
     def _keep_already_calculated_save_hours(self,
-                                            index_now,
                                             prev_peak_hours,
                                             reset_continuous_hours,
                                             continuous_hours_from_old_calc,
@@ -456,37 +447,49 @@ class ElectricalPriceCalc(ad.ADBase):
                                             on_for_minimum
                                             ):
         peak_hours = []
-        continue_from_peak = False
         continuous_hours_from_old_calc = 0
         continuous_hours_int = 0
+        start_times = [item['start'] for item in self.elpricestoday]
+        end_times = [item['end'] for item in self.elpricestoday]
+        checkTime = self.ADapi.datetime(aware=True).replace(minute=0, second=0, microsecond=0)
 
-        for current in self.elpricestoday[:index_now]:
-            if current['start'] in [item for item in prev_peak_hours]:
-                self.ADapi.log(f"Found peak in previous: {current['start']}") ###
-                peak_hours.append(current['start'])
-                if not continue_from_peak:
-                    start_of_peak = current['start']
-                continue_from_peak = True
+        for item in prev_peak_hours:
+            if item['start'] > checkTime:
+                return [], 0
+            else:
+                index_now = bisect.bisect_left(start_times, item['start'])
+                if item['end'] > checkTime:
+                    end_of_peak = checkTime
+                    index_end = bisect.bisect_right(end_times, checkTime)
+                else:
+                    index_end = bisect.bisect_right(end_times, item['end'])
+                    end_of_peak = item['end']
 
-            elif not reset_continuous_hours:
-                if continue_from_peak:
-                    continuous_hours = current['start'] -start_of_peak
-                    continue_from_peak = False
-                    continuous_hours_int = (continuous_hours.days * 24 * 60 + continuous_hours.seconds // 60) / 60
-                    continuous_hours_from_old_calc += continuous_hours_int
-                    self.ADapi.log(f"Cont from old #1: {continuous_hours_from_old_calc}") ###
-                elif (
+                # Find previous continuous time and remove.
+                if (
                     continuous_hours_int > 0
                     and continuous_hours_from_old_calc > 0
                 ):
+                    time_since_last_peak = current['start'] -start_of_peak
+                    time_since_last_peak_int = (time_since_last_peak.days * 24 * 60 + time_since_last_peak.seconds // 60) / 60
                     difference = max_continuous_hours - continuous_hours_int
-                    remove = difference / on_for_minimum
+                    remove = (difference / on_for_minimum) * time_since_last_peak_int
                     continuous_hours_from_old_calc -= remove
-                    self.ADapi.log(f"Cont from old #2: {continuous_hours_from_old_calc}. Removed: {remove}") ###
+                    if continuous_hours_from_old_calc < 0:
+                        continuous_hours_from_old_calc = 0
+                    self.ADapi.log(f"Cont from old #1: {continuous_hours_from_old_calc}. Removed: {remove}") ###
+
+                # Calculate new peak time.
+                start_of_peak = item['start']
+                for current in self.elpricestoday[index_now:index_end]:
+                    peak_hours.append(current['start'])
+
+                if not reset_continuous_hours:
+                    continuous_hours = end_of_peak - start_of_peak
+                    continuous_hours_int = (continuous_hours.days * 24 * 60 + continuous_hours.seconds // 60) / 60
+                    continuous_hours_from_old_calc += continuous_hours_int
                 else:
                     continuous_hours_from_old_calc = 0
-            else:
-                continuous_hours_from_old_calc = 0
 
         self.ADapi.log(f"Prev peak cont form old: {continuous_hours_from_old_calc}") ###
         return peak_hours, math.ceil(continuous_hours_from_old_calc)
@@ -567,6 +570,7 @@ class ElectricalPriceCalc(ad.ADBase):
         stop_calculating_at, after_peak_price, last_peak_end_time = self._determine_stop_calculating_at(peak_hours = peak_hours)
         continue_from_peak = False
         continuous_hours_int:float = 0
+        pricedifference_increase = ((pricedifference_increase-1)/ self.todayslength) * 24 + 1
 
         check_index_now = stop_calculating_at - index_now -1
 
@@ -613,7 +617,6 @@ class ElectricalPriceCalc(ad.ADBase):
             if continuous_hours_int > 0:
                 difference = max_continuous_hours - continuous_hours_int
                 remove = (difference / on_for_minimum) / self.todayslength * 24
-                #self.ADapi.log(f"Removing {remove} in {stop_calculating_at - i -1} from cont: {continuous_hours_int}") ###
                 continuous_hours_int -= remove
 
             if current_max_continuous_hours < max_continuous_hours:
@@ -625,7 +628,6 @@ class ElectricalPriceCalc(ad.ADBase):
                 current_max_continuous_hours = max_continuous_hours
 
             if i == check_index_now and continue_from_peak:
-                self.ADapi.log(f"Adding old cont {continuous_hours_from_old_calc} to {continuous_hours}") ###
                 continuous_hours += datetime.timedelta(hours = continuous_hours_from_old_calc)
                 peak_hours, last_peak_end_time, continuous_hours_int = self._calculate_continuous_hours(
                     peak_hours = peak_hours,
