@@ -9,6 +9,9 @@ from appdaemon import adbase as ad
 import datetime
 import math
 import bisect
+from nordpool import elspot
+from geopy.geocoders import Nominatim
+import holidays
 from typing import List, Tuple
 
 
@@ -19,39 +22,25 @@ class ElectricalPriceCalc(ad.ADBase):
         self.ADapi = self.get_ad_api()
         self.HASS_namespace:str = self.args.get('main_namespace', 'default')
 
-        if 'nordpool' in self.args:
-            self.nordpool_prices = self.args['nordpool']
-        else:
-            sensor_states = self.ADapi.get_state()
-            for sensor_id, sensor_states in sensor_states.items():
-                if 'nordpool' in sensor_id:
-                    self.nordpool_prices = sensor_id
-                    break
-        if not self.nordpool_prices:
-            raise Exception(
-                "Nordpool custom components not found. Please install Nordpool via HACS: https://github.com/custom-components/nordpool"
-            )
+        self.country_code = None
+        if 'country_code' in self.args:
+            self.country_code = self.args['country_code']
+        elif 'latitude' in self.config and 'longitude' in self.config:
+            try:
+                geolocator = Nominatim(user_agent="ElectricalPriceCalc")
+                location = geolocator.reverse((self.config['latitude'], self.config['longitude']), language='en')
+                self.country_code = location.raw['address'].get('country_code', 'NO')
+            except Exception as e:
+                self.ADapi.log(f"Failed to get country code from geolocation: {e}", level='ERROR')
 
-        if 'workday' in self.args:
-            self.workday = self.args['workday']
-        elif self.ADapi.entity_exists('binary_sensor.workday_sensor', namespace = self.HASS_namespace):
-            self.workday = 'binary_sensor.workday_sensor'
-        else:
-            self.workday = 'binary_sensor.workday_sensor_AD'
-            if not self.ADapi.entity_exists(self.workday, namespace = self.HASS_namespace):
-                self.ADapi.call_service("state/set",
-                    entity_id = self.workday,
-                    attributes = {'friendly_name' : 'Workday'},
-                    state = 'on',
-                    namespace = self.HASS_namespace
-                )
-                self.ADapi.log(
-                    "'workday' binary_sensor not defined in app configuration or found in Home Assistant. "
-                    "Will only use Saturdays and Sundays as nighttax and not Holidays. "
-                    "Please install workday sensor from: https://www.home-assistant.io/integrations/workday/ "
-                    "to calculate nighttime tax during hollidays",
-                    level = 'INFO'
-                )
+        if self.country_code is not None:
+            # Initialize holidays for the detected country (default to Sweden if not found)
+            try:
+                holiday_class = getattr(holidays, self.country_code.upper())
+                self.holidays = holiday_class(years=[datetime.date.today().year, datetime.date.today().year + 1])
+            except AttributeError:
+                self.ADapi.log(f"Could not find holidays for {self.country_code}, defaulting to Norway.", level = 'INFO')
+                self.holidays = holidays.Norway(years=[datetime.date.today().year, datetime.date.today().year + 1])
 
         self.daytax:float = self.args.get('daytax',0)
         self.nighttax:float = self.args.get('nighttax',0)
@@ -60,27 +49,148 @@ class ElectricalPriceCalc(ad.ADBase):
 
         self.nordpool_last_updated = self.ADapi.datetime(aware=True)
 
-        self.currency:str = self.ADapi.get_state(self.nordpool_prices, attribute = 'currency', namespace = self.HASS_namespace)
-
         self.elpricestoday:list = []
         self.sorted_elprices_today:list = []
         self.sorted_elprices_tomorrow:list = []
         self.todayslength:int = 0
 
-        self._fetchNordpoolPrices()
-        self.ADapi.listen_state(self.update_price_rundaily, self.nordpool_prices,
-            attribute = 'tomorrow'
-        )
-        #self.ADapi.log(self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'all')) ###
+        if 'pricearea' in self.args:
+            self.pricearea = self.args['pricearea']
+            self.currency = self.args['currency']
+            self.VAT = self.args.get('VAT', 1.25)
+            self.prices_spot = elspot.Prices(self.currency)
+            self._fetchNordpoolSpotPrices(0)
+            self.ADapi.run_daily(self._fetchNordpoolSpotPrices, "00:00:01")
+            self.ADapi.run_daily(self._fetchNordpoolSpotPrices, "13:00:00")
+            
+        elif 'nordpool' in self.args:
+            self.nordpool_prices = self.args['nordpool']
+            self.currency:str = self.ADapi.get_state(self.nordpool_prices, attribute = 'currency', namespace = self.HASS_namespace)
+            self._fetchNordpoolPrices(0)
+            self.ADapi.listen_state(self.update_price_rundaily, self.nordpool_prices,
+                attribute = 'tomorrow'
+            )
+        else:
+            sensor_states = self.ADapi.get_state()
+            for sensor_id, sensor_states in sensor_states.items():
+                if 'nordpool' in sensor_id:
+                    self.nordpool_prices = sensor_id
+                    self.currency:str = self.ADapi.get_state(self.nordpool_prices, attribute = 'currency', namespace = self.HASS_namespace)
+                    self._fetchNordpoolPrices(0)
+                    self.ADapi.listen_state(self.update_price_rundaily, self.nordpool_prices,
+                        attribute = 'tomorrow'
+                    )
+                    break
 
+
+    def _fetchNordpoolSpotPrices(self, kwargs) -> None:
+        """ Fetches prices from the Nordpool library and adds day and night tax.
+        """
+        nordpool_todays_prices:list = []
+        nordpool_tomorrow_prices:list = []
+        try:
+            todays_prices = self.prices_spot.fetch(
+                # Need to specify end_date to fetch prices for today,
+                # as otherwise the library defaults to tomorrow.
+                end_date=datetime.date.today(),
+                areas=[self.pricearea],
+                # Set resolution to 15 minutes, library defaults to 60 minutes.
+                resolution=15
+            )
+        except Exception as e:
+            self.ADapi.log(f"Nordpool prices today failed. Exception: {e}", level = 'DEBUG')
+            self.ADapi.run_in(self._fetchNordpoolSpotPrices, 1800)
+            return
+        else:
+            nordpool_todays_prices = todays_prices['areas'][self.pricearea]['values']
+        try:
+            tomorrow_prices = self.prices_spot.fetch(
+                areas=[self.pricearea],
+                resolution=15
+            )
+        except Exception as e:
+            self.ADapi.log(f"Nordpool prices today failed. Exception: {e}", level = 'DEBUG')
+            self.ADapi.run_in(self._fetchNordpoolSpotPrices, 1800)
+        else:
+            if tomorrow_prices is not None:
+                nordpool_tomorrow_prices = tomorrow_prices['areas'][self.pricearea]['values']
+            elif self.ADapi.datetime(aware=True) > self.ADapi.parse_datetime('13:00:00', today = True, aware=True):
+                self.ADapi.run_in(self._fetchNordpoolSpotPrices, 600)
+
+        self.sorted_elprices_today = []
+        self.sorted_elprices_tomorrow = []
+
+        isNotWorkday:bool = self._is_holiday(datetime.date.today())
+        beforesix = self.ADapi.parse_datetime("06:00:00", today = True, aware=True)
+        aftertwentytwo = self.ADapi.parse_datetime("22:00:00", today = True, aware=True)
+
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+
+        # Todays prices
+        for item in nordpool_todays_prices:
+            calculated_support:float = 0.0 # Power support calculation
+            item['value'] = (float(item['value']) / 1000) * self.VAT # convert price from pr mega to kilo and adds VAT
+            item['start'] = item['start'].astimezone(local_tz)
+            item['end'] = item['end'].astimezone(local_tz)
+
+            if float(item['value']) > self.power_support_above:
+                calculated_support = (float(item['value']) - self.power_support_above ) * self.support_amount
+
+            if (
+                item['end'] <= beforesix
+                or item['start'] >= aftertwentytwo
+                or datetime.datetime.today().weekday() > 4
+                or isNotWorkday
+            ):
+                item['value'] = round(float(item['value']) + self.nighttax - calculated_support, 3)
+                self.sorted_elprices_today.append(item['value'])
+            else:
+                item['value'] = round(float(item['value']) + self.daytax - calculated_support, 3)
+                self.sorted_elprices_today.append(item['value'])
+
+        self.sorted_elprices_today = sorted(self.sorted_elprices_today)
+        self.todayslength = len(self.sorted_elprices_today)
+
+        # Tomorrows prices if available
+        if (
+            len(nordpool_tomorrow_prices) > 0
+            and nordpool_todays_prices != nordpool_tomorrow_prices
+        ):
+            isNotWorkday:bool = self._is_holiday(datetime.date.today() + datetime.timedelta(days = 1))
+            for item in nordpool_tomorrow_prices:
+                calculated_support:float = 0.0 # Power support calculation
+                item['value'] = (float(item['value']) / 1000) * self.VAT # convert price from pr mega to kilo and adds VAT
+                item['start'] = item['start'].astimezone(local_tz)
+                item['end'] = item['end'].astimezone(local_tz)
+
+                if float(item['value']) > self.power_support_above:
+                    calculated_support = (float(item['value']) - self.power_support_above ) * self.support_amount
+
+                """ TODO: Does not check if tomorrow is holiday when applying day or night tax to tomorrows prices. 
+                """
+                if (
+                    item['end'] <= beforesix
+                    or item['start'] >= aftertwentytwo
+                    or datetime.datetime.today().weekday() == 4
+                    or datetime.datetime.today().weekday() == 5
+                    or isNotWorkday
+                ):
+                    item['value'] = round(float(item['value']) + self.nighttax - calculated_support, 3)
+                    self.sorted_elprices_tomorrow.append(item['value'])
+                else:
+                    item['value'] = round(float(item['value']) + self.daytax - calculated_support, 3)
+                    self.sorted_elprices_tomorrow.append(item['value'])
+
+            self.sorted_elprices_tomorrow = sorted(self.sorted_elprices_tomorrow)
+        self.elpricestoday = nordpool_todays_prices + nordpool_tomorrow_prices
 
     def update_price_rundaily(self, entity, attribute, old, new, kwargs) -> None:
         """ Calls fetchNordpoolPrices() on sensor change.
         """
-        self._fetchNordpoolPrices()
+        self._fetchNordpoolPrices(0)
 
 
-    def _fetchNordpoolPrices(self) -> None:
+    def _fetchNordpoolPrices(self, kwargs) -> None:
         """ Fetches prices from Nordpool sensor and adds day and night tax.
         """
         nordpool_todays_prices:list = []
@@ -88,7 +198,7 @@ class ElectricalPriceCalc(ad.ADBase):
         self.sorted_elprices_today = []
         self.sorted_elprices_tomorrow = []
 
-        isNotWorkday:bool = self.ADapi.get_state(self.workday) == 'off'
+        isNotWorkday:bool = self._is_holiday(datetime.date.today())
         beforesix = self.ADapi.parse_datetime("06:00:00", today = True, aware=True)
         aftertwentytwo = self.ADapi.parse_datetime("22:00:00", today = True, aware=True)
 
@@ -126,6 +236,7 @@ class ElectricalPriceCalc(ad.ADBase):
 
         # Tomorrows prices if available
         if self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'tomorrow_valid'):
+            isNotWorkday:bool = self._is_holiday(datetime.date.today() + datetime.timedelta(days = 1))
             try:
                 nordpool_tomorrow_prices = self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'raw_tomorrow')
                 if (
@@ -147,6 +258,7 @@ class ElectricalPriceCalc(ad.ADBase):
                             or item['start'] >= aftertwentytwo
                             or datetime.datetime.today().weekday() == 4
                             or datetime.datetime.today().weekday() == 5
+                            or isNotWorkday
                         ):
                             item['value'] = round(float(item['value']) + self.nighttax - calculated_support, 3)
                             self.sorted_elprices_tomorrow.append(item['value'])
@@ -191,27 +303,6 @@ class ElectricalPriceCalc(ad.ADBase):
             if not calculateBeforeNextDayPrices:
                 return None, None, self.sorted_elprices_today[indexesToFinish]
 
-        elif (
-            self.ADapi.now_is_between('15:00:00', '23:50:00')
-            and len(self.elpricestoday) == self.todayslength
-            and self.ADapi.datetime(aware=True) - self.nordpool_last_updated > datetime.timedelta(minutes = 30)
-        ):
-            """ It can happen that the Nordpool does not update properly with tomorrows prices.
-                That has not been tested properly so I'm not sure reloading intergration works.
-                One time I had to restart HA for Nordpool integration to get tomorrows prices.
-                TODO: Find out what data to trigger reload of Nordpool integration.
-            """
-            self.nordpool_last_updated = self.ADapi.datetime(aware=True)
-            self.ADapi.log(
-                "RELOADS Nordpool integration. Is tomorrows prices valid? "
-                f"{self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'tomorrow_valid')} : "
-                f"{self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'tomorrow')}",
-                level = 'WARNING'
-            )
-
-            self.ADapi.call_service('homeassistant/reload_config_entry',
-                entity_id = self.nordpool_prices
-            )
 
         priceToComplete:float = 0.0
         avgPriceToComplete:float = 1000.0
@@ -436,7 +527,7 @@ class ElectricalPriceCalc(ad.ADBase):
                 ):
                     difference = max_continuous_hours - continuous_hours_int
                     remove = difference / on_for_minimum
-                    continuous_hours_from_old_calc -= math.floor(remove)
+                    continuous_hours_from_old_calc -= remove
                     self.ADapi.log(f"Cont from old #2: {continuous_hours_from_old_calc}. Removed: {remove}") ###
                 else:
                     continuous_hours_from_old_calc = 0
@@ -444,7 +535,7 @@ class ElectricalPriceCalc(ad.ADBase):
                 continuous_hours_from_old_calc = 0
 
         self.ADapi.log(f"Prev peak cont form old: {continuous_hours_from_old_calc}") ###
-        return peak_hours, continuous_hours_from_old_calc
+        return peak_hours, math.ceil(continuous_hours_from_old_calc)
 
     def _find_peak_hours(self,
                          index_now,
@@ -523,7 +614,7 @@ class ElectricalPriceCalc(ad.ADBase):
 
         stop_calculating_at, after_peak_price, last_peak_end_time = self._determine_stop_calculating_at(peak_hours = peak_hours)
         continue_from_peak = False
-        continuous_hours_int:int = 0
+        continuous_hours_int:float = 0
 
         check_index_now = stop_calculating_at - index_now -1
 
@@ -572,8 +663,9 @@ class ElectricalPriceCalc(ad.ADBase):
 
             if continuous_hours_int > 0:
                 difference = max_continuous_hours - continuous_hours_int
-                remove = difference / on_for_minimum
-                continuous_hours_int -= math.floor(remove)
+                remove = (difference / on_for_minimum) / self.todayslength * 24
+                #self.ADapi.log(f"Removing {remove} in {stop_calculating_at - i -1} from cont: {continuous_hours_int}") ###
+                continuous_hours_int -= remove
 
             if current_max_continuous_hours < max_continuous_hours:
                 td = last_peak_end_time - current['start']
@@ -591,7 +683,7 @@ class ElectricalPriceCalc(ad.ADBase):
                     max_continuous_hours = current_max_continuous_hours,
                     on_for_minimum = on_for_minimum,
                     continuous_hours = continuous_hours,
-                    continuous_hours_int = continuous_hours_int,
+                    continuous_hours_int = math.ceil(continuous_hours_int),
                     start_peak_time = current['start'],
                     last_peak_end_time = last_peak_end_time,
                     pricedrop = pricedrop,
@@ -750,3 +842,7 @@ class ElectricalPriceCalc(ad.ADBase):
                                               ) -> float:
         start_hour_price = pricedrop * (multiplier ** iterations)
         return start_hour_price
+
+
+    def _is_holiday(self, date):
+        return date in self.holidays
