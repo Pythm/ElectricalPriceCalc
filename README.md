@@ -19,7 +19,7 @@ The app calculates:
 - Optimal **electric vehicle charging times** based on future Nordpool prices (including taxes).
 - When to **spend or save electricity** for cost efficiency.
 
-> Originally part of a larger project called `ElectricalManagement`, this app was extracted into its own repository for easier integration into custom automation workflows.
+> Originally part of [ad-ElectricalManagement](https://github.com/Pythm/ad-ElectricalManagement). This app was extracted into its own repository for easier integration into custom automation workflows. The ad-ElectricalManagement app will use this app going forward.
 
 ---
 
