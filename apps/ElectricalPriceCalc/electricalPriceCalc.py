@@ -42,8 +42,9 @@ class ElectricalPriceCalc(ad.ADBase):
                 self.holidays = holidays.Norway(years=[datetime.date.today().year, datetime.date.today().year + 1])
 
         # Set up prices and taxes
-        self.daytax:float = self.args.get('daytax',0)
-        self.nighttax:float = self.args.get('nighttax',0)
+        self.daytax = self.args.get('daytax',0)
+        self.nighttax = self.args.get('nighttax',0)
+        self.additional_tax:float = self.args.get('additional_tax',0)
         self.power_support_above:float = self.args.get('power_support_above', 10)
         self.support_amount:float = self.args.get('support_amount', 0)
 
@@ -78,8 +79,6 @@ class ElectricalPriceCalc(ad.ADBase):
                         attribute = 'tomorrow'
                     )
                     break
-
-
 
     def _update_price_rundaily(self, entity, attribute, old, new, kwargs) -> None:
         self._fetchNordpoolPrices(0)
@@ -212,6 +211,17 @@ class ElectricalPriceCalc(ad.ADBase):
                                     aftertwentytwo,
                                     isNotWorkday):
         sorted_elprices:list = []
+        if type(self.daytax) == dict:
+            month_number = nordpool_prices[0]['start'].month
+            self.current_daytax = self.daytax[month_number]
+        else:
+            self.current_daytax = self.daytax
+        if type(self.nighttax) == dict:
+            month_number = nordpool_prices[0]['start'].month
+            self.current_nighttax = self.nighttax[month_number]
+        else:
+            self.current_nighttax = self.nighttax
+        
         for item in nordpool_prices:
             calculated_support:float = 0.0 # Power support calculation
 
@@ -222,10 +232,10 @@ class ElectricalPriceCalc(ad.ADBase):
                 or item['start'] >= aftertwentytwo
                 or isNotWorkday
             ):
-                item['value'] = round(float(item['value']) + self.nighttax - calculated_support, 3)
+                item['value'] = round(float(item['value']) + self.current_nighttax + self.additional_tax - calculated_support, 3)
                 sorted_elprices.append(item['value'])
             else:
-                item['value'] = round(float(item['value']) + self.daytax - calculated_support, 3)
+                item['value'] = round(float(item['value']) + self.current_daytax + self.additional_tax - calculated_support, 3)
                 sorted_elprices.append(item['value'])
         sorted_elprices = sorted(sorted_elprices)
         return nordpool_prices, sorted_elprices
@@ -407,6 +417,16 @@ class ElectricalPriceCalc(ad.ADBase):
         low_priced_list = self._putPeaksInOrder(low_priced_items)
         return low_priced_list
 
+    def electricity_price_now(self, time = None) -> float:
+        """ Return current complete electricity price based on now or time given
+        """
+        if time is None:
+            time = self.ADapi.datetime(aware=True)
+        for range_item in self.elpricestoday:
+            if (start := range_item['start']) <= time < (end := range_item['end']):
+                return range_item['value']
+        return None
+
     def print_peaks(self,
                     saving_hours_list:list = []
                     ) -> None:
@@ -466,7 +486,6 @@ class ElectricalPriceCalc(ad.ADBase):
 
                     if continuous_hours_from_old_calc < 0:
                         continuous_hours_from_old_calc = 0
-                    self.ADapi.log(f"Cont from old #1: {continuous_hours_from_old_calc}") ###
                 return saving_hours_list, math.ceil(continuous_hours_from_old_calc)
             else:
                 index_now = bisect.bisect_left(start_times, item['start'])
@@ -485,7 +504,6 @@ class ElectricalPriceCalc(ad.ADBase):
 
                     if continuous_hours_from_old_calc < 0:
                         continuous_hours_from_old_calc = 0
-                    self.ADapi.log(f"Cont from old #2: {continuous_hours_from_old_calc}") ###
 
                 # Calculate new peak time.
                 start_of_peak = item['start']
@@ -530,10 +548,9 @@ class ElectricalPriceCalc(ad.ADBase):
 
                 if continuous_hours_from_old_calc < 0:
                     continuous_hours_from_old_calc = 0
-                self.ADapi.log(f"Cont from old #4: {continuous_hours_from_old_calc}") ###
 
 
-        self.ADapi.log(f"Prev peak cont form old: {continuous_hours_from_old_calc}") ###
+        self.ADapi.log(f"Concluded with peak cont form old: {continuous_hours_from_old_calc}") ###
         return saving_hours_list, math.ceil(continuous_hours_from_old_calc)
 
     def _calc_remove_hours_after_last_peak(self,
@@ -543,7 +560,6 @@ class ElectricalPriceCalc(ad.ADBase):
                                            max_continuous_hours,
                                            on_for_minimum):
         time_since_last_peak = current_time - last_end_of_peak
-        self.ADapi.log(f"Time since last peak in old peak hours: {time_since_last_peak}") ###
         time_since_last_peak_int = (time_since_last_peak.days * 24 * 60 + time_since_last_peak.seconds // 60) / 60
         difference = max_continuous_hours - continuous_hours_int
         return (difference / on_for_minimum) * time_since_last_peak_int
@@ -648,10 +664,8 @@ class ElectricalPriceCalc(ad.ADBase):
                 saving_hours_list, last_peak_end_time, continuous_hours_int = self._calculate_continuous_hours(
                     saving_hours_list = saving_hours_list,
                     max_continuous_hours = current_max_continuous_hours,
-                    on_for_minimum = on_for_minimum,
                     continuous_hours = continuous_hours,
                     continuous_hours_int = continuous_hours_int,
-                    start_peak_time = current['start'],
                     last_peak_end_time = last_peak_end_time,
                     pricedrop = pricedrop,
                     pricedifference_increase = pricedifference_increase,
@@ -686,10 +700,8 @@ class ElectricalPriceCalc(ad.ADBase):
                 saving_hours_list, last_peak_end_time, continuous_hours_int = self._calculate_continuous_hours(
                     saving_hours_list = saving_hours_list,
                     max_continuous_hours = current_max_continuous_hours,
-                    on_for_minimum = on_for_minimum,
                     continuous_hours = continuous_hours,
                     continuous_hours_int = math.ceil(continuous_hours_int),
-                    start_peak_time = current['start'],
                     last_peak_end_time = last_peak_end_time,
                     pricedrop = pricedrop,
                     pricedifference_increase = pricedifference_increase,
@@ -706,10 +718,8 @@ class ElectricalPriceCalc(ad.ADBase):
     def _calculate_continuous_hours(self,
                                     saving_hours_list,
                                     max_continuous_hours,
-                                    on_for_minimum,
                                     continuous_hours,
                                     continuous_hours_int,
-                                    start_peak_time,
                                     last_peak_end_time,
                                     pricedrop,
                                     pricedifference_increase,
@@ -755,11 +765,9 @@ class ElectricalPriceCalc(ad.ADBase):
         price_start = self.elpricestoday[index_start]['value']
         price_end = self.elpricestoday[index_end]['value']
         continuous_items_to_remove =  int((continuous_hours_to_remove/24 * self.todayslength))
-        was_able_to_remove_in_price_check:bool = False
 
         # Find the least expencive hour in peak_hour.
         list_with_lower_prices:list = []
-        list_with_lower_prices_before_price_increase:list = []
         for i, current in enumerate(self.elpricestoday[index_start:index_end]):
             if (
                 current['value'] < price_start
@@ -789,7 +797,7 @@ class ElectricalPriceCalc(ad.ADBase):
                 return saving_hours_list, last_peak_end_time
             
             for current in reversed(self.elpricestoday[index_start_corrected:index_end]):
-                if not current['start'] in test_list:
+                if not current['start'] in saving_hours_list:
                     index_end -= 1
                     last_peak_end_time = current['start']
                 else:
