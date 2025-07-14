@@ -1,6 +1,6 @@
 # ElectricalPriceCalc
 
-A Python app that fetches electricity prices from [Nordpool](https://www.nordpoolgroup.com/) and calculates optimal charging times and energy-saving opportunities for your electric car.
+A Python app that fetches electricity prices from [Nordpool](https://www.nordpoolgroup.com/) and calculates optimal charging times and energy-saving opportunities for your electric equipment.
 
 ---
 
@@ -25,7 +25,7 @@ The app calculates:
 
 ## 📦 Dependencies
 
-Install the required packages using `requirements.txt`:
+Install the required packages using `requirements.txt` if your Appdaemon install method does not handle requirements automatically:
 
 ```bash
 pip install -r requirements.txt
@@ -43,17 +43,42 @@ pip install -r requirements.txt
 2. **Configure the app** in your AppDaemon configuration file (`.yaml` or `.toml`):
 
 ```yaml
-  electricalPriceCalc:
-    module: electricalPriceCalc
-    class: ElectricalPriceCalc
-    pricearea: NO5  # Nordpool price area (e.g., NO5, DE1)
-    currency: NOK   # Default: EUR
-    country_code: NO  # Used to fetch location data
-    VAT: 1.25       # Default: 25% VAT (1.25 = 1 + 0.25)
-    daytax: 0.5986  # Daytime electricity tax (optional)
-    nighttax: 0.4713 # Nighttime electricity tax (optional)
-    power_support_above: 0.9125  # Threshold for power support (includes VAT) (optional)
-    support_amount: 0.9          # Percentage of support (e.g., 90%) (optional)
+electricalPriceCalc:
+  module: electricalPriceCalc
+  class: ElectricalPriceCalc
+  pricearea: 'NO5'  # Nordpool price area (e.g., NO5, DE1)
+  currency: 'NOK'   # Default: EUR
+  country_code: 'NO'  # Used to fetch location data
+  VAT: 1.25       # Default: 25% VAT (1.25 = 1 + 0.25)
+  daytax: # Daytime electricity tax (optional)
+    1: 0.4782
+    2: 0.4782
+    3: 0.4782
+    4: 0.5986
+    5: 0.5986
+    6: 0.5986
+    7: 0.5986
+    8: 0.5986
+    9: 0.5986
+    10: 0.5986
+    11: 0.5986
+    12: 0.5986
+  nighttax: # Nighttime electricity tax (optional)
+    1: 0.3602
+    2: 0.3602
+    3: 0.3602
+    4: 0.4713
+    5: 0.4713
+    6: 0.4713
+    7: 0.4713
+    8: 0.4713
+    9: 0.4713
+    10: 0.4713
+    11: 0.4713
+    12: 0.4713
+  additional_tax: 0.0295
+  power_support_above: 0.9125  # Threshold for power support (includes VAT) (optional)
+  support_amount: 0.9          # Percentage of support (e.g., 90%) (optional)
 ```
 
 ---
@@ -61,9 +86,9 @@ pip install -r requirements.txt
 ## 📌 Notes
 
 - `country_code` will attempt to fetch latitude/longitude from your AppDaemon configuration if not defined.
-- `VAT` is specified as a multiplier (e.g., 1.25 represents 25% VAT).
+- `VAT` is specified as a multiplier (e.g., 1.25 represents 25% VAT) and is applied only to Nordpool Price before adding the other taxes.
 - Taxes and thresholds are optional and can be customized based on your region.
-
+- `daytax` and `nighttax` can be an int or a dict with month numbers : tax
 ---
 
 ## ✅ Contributing
@@ -83,49 +108,26 @@ Contributions are welcome! Please open an issue or submit a pull request.
 ### 📌 Example Use Case
 
 ```python
-    if (
-        len(self.time_to_save) == 0 # if not run before (Empty list)
-        or self.electricity_price.tomorrow_valid # if tomorrow price is found
-        or self.ADapi.now_is_between('00:00:00', '12:00:00') # Before tomorrow price is expected
-    ):
-        # Get time to turn down heaters
-        self.time_to_save = self.electricity_price.findpeakhours(
-            pricedrop = 0.1,
-            max_continuous_hours = 12,
-            on_for_minimum = 4,
-            pricedifference_increase =  1.07,
-            reset_continuous_hours = False,
-            prev_peak_hours = self.time_to_save
-        )
-        """Finds peak variations in electricity price for saving purposes and returns list with datetime objects;
-           'start', 'end' and 'duration' as a timedelta object for how long the electricity has been off.
-        """
+    ELECTRICITYPRICE = self.ADapi.get_app(self.args['electricalPriceApp'])
 
-        if self.time_to_save:
-            self.ADapi.log(f"Printout from test:{self.electricity_price.print_peaks(self.time_to_save)}")
+    price_now = ELECTRICITYPRICE.electricity_price_now()
 
-        # Get runtime / chargetime
-        """ Returns starttime, endtime and price for cheapest continuous hours with different results depenting on time the call was made.
-        """
-        starttime, stoptime, price = self.electricity_price.getContinuousCheapestTime(
-            hoursTotal = 1.7,
-            calculateBeforeNextDayPrices = False,
-            finishByHour = 7
-        )
-        self.ADapi.log(
-            f"Start: {starttime} "
-            f"Stop: {stoptime} "
-            f"with price: {price}"
-        )
-        # Find times to turn up heaters before price increase
-        self.spend = self.electricity_price.findLowPriceHours(
-            priceincrease = 0.8
-        )
-        """ Finds low price variations in electricity price for spending purposes and returns list with datetime objects.
-        """
+    ChargingAt, estimateStop, price = ELECTRICITYPRICE.get_Continuous_Cheapest_Time(
+        hoursTotal = 3,
+        calculateBeforeNextDayPrices = False,
+        finishByHour = 7
+    )
 
-    else:
-        self.ADapi.log(f"Tomorrows prices not ready. Check in 10 minutes") ###
-        self.ADapi.run_in(self.get_new_prices, 600)
+    time_to_save = ELECTRICITYPRICE.find_times_to_save(
+        pricedrop = 0.08,
+        max_continuous_hours = 12,
+        on_for_minimum = 6,
+        pricedifference_increase = 1.07,
+        reset_continuous_hours = False,
+        previous_save_hours = time_to_save
+    )
 
+    time_to_spend = ELECTRICITYPRICE.find_times_to_spend(
+        priceincrease = 0.5
+    )
 ```
