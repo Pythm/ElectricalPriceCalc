@@ -549,8 +549,6 @@ class ElectricalPriceCalc(ad.ADBase):
                 if continuous_hours_from_old_calc < 0:
                     continuous_hours_from_old_calc = 0
 
-
-        self.ADapi.log(f"Concluded with peak cont form old: {continuous_hours_from_old_calc}") ###
         return saving_hours_list, math.ceil(continuous_hours_from_old_calc)
 
     def _calc_remove_hours_after_last_peak(self,
@@ -563,6 +561,7 @@ class ElectricalPriceCalc(ad.ADBase):
         time_since_last_peak_int = (time_since_last_peak.days * 24 * 60 + time_since_last_peak.seconds // 60) / 60
         difference = max_continuous_hours - continuous_hours_int
         return (difference / on_for_minimum) * time_since_last_peak_int
+
 
     def _find_peak_hours(self,
                          index_now,
@@ -678,9 +677,6 @@ class ElectricalPriceCalc(ad.ADBase):
 
                 continuous_hours = datetime.timedelta(0)
                 peakdiff = pricedrop
-            elif continue_from_peak: ###
-                self.ADapi.log(f"Found no entry in calculating peak hours in: {stop_calculating_at - i -1}. Continue should not be true?") ###
-                continue_from_peak = False ###
 
             if continuous_hours_int > 0:
                 difference = max_continuous_hours - continuous_hours_int
@@ -691,7 +687,6 @@ class ElectricalPriceCalc(ad.ADBase):
                 td = last_peak_end_time - current['start']
                 normal_on_timedelta = (td.days * 24 * 60 + td.seconds // 60) / 60
                 current_max_continuous_hours += math.ceil(normal_on_timedelta / on_for_minimum)
-                self.ADapi.log(f"Current max cont hours: {current_max_continuous_hours}") ###
             elif current_max_continuous_hours > max_continuous_hours:
                 current_max_continuous_hours = max_continuous_hours
 
@@ -785,7 +780,6 @@ class ElectricalPriceCalc(ad.ADBase):
             index_start_corrected = index_start
             for i, current in enumerate(self.elpricestoday[index_start:index_end]):
                 if current['value'] <= remove_price_below:
-                    self.ADapi.log(f"Remove {current['start']} in too many continuous hours") ###
                     saving_hours_list.remove(current['start'])
                     continuous_items_to_remove -= 1
                     if i == index_start_corrected - index_start:
@@ -845,7 +839,6 @@ class ElectricalPriceCalc(ad.ADBase):
                 index_start += 1
             
             if index_start == index_end:
-                self.ADapi.log(f"Removed all hours possible and now end in near: {index_end}") ###
                 break
 
         return saving_hours_list, last_peak_end_time
