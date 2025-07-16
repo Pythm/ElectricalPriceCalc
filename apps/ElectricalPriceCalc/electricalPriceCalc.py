@@ -241,18 +241,19 @@ class ElectricalPriceCalc(ad.ADBase):
         return nordpool_prices, sorted_elprices
 
     def get_Continuous_Cheapest_Time(self,
-                                     hoursTotal:float,
-                                     calculateBeforeNextDayPrices:bool,
-                                     finishByHour:int
-                                     ) -> Tuple[datetime, datetime, float]:
-        """ Returns starttime, endtime and price for cheapest continuous hours with different results depenting on time the call was made.
+                                     hoursTotal:float = 2,
+                                     calculateBeforeNextDayPrices:bool = False,
+                                     finishByHour:int = 7,
+                                     startBeforePrice:float = 0.01,
+                                     stopAtPriceIncrease:float = 0.01
+                                     ) -> Tuple[datetime, datetime, datetime, float]:
+        """ Returns starttime, estimated endtime, Final endtime and price for cheapest continuous hours with different results depenting on time the call was made.
         """
         indexesToFinish = math.ceil(hoursTotal / 24 * self.todayslength)
         if indexesToFinish == 0:
             indexesToFinish = 1
 
         finishAt = self.ADapi.datetime(aware=True).replace(hour = 0, minute = 0, second = 0, microsecond = 0) + datetime.timedelta(hours = finishByHour)
-
         if (
             self.ADapi.now_is_between('13:00:00', '23:59:59')
             and len(self.elpricestoday) > self.todayslength
@@ -263,10 +264,9 @@ class ElectricalPriceCalc(ad.ADBase):
         elif (
             self.ADapi.now_is_between('06:00:00', '15:00:00')
             and len(self.elpricestoday) == self.todayslength
+            and not calculateBeforeNextDayPrices
         ):
-            if not calculateBeforeNextDayPrices:
-                return None, None, self.sorted_elprices_today[indexesToFinish]
-
+            return None, None, self.sorted_elprices_today[indexesToFinish]
 
         priceToComplete:float = 0.0
         avgPriceToComplete:float = 1000.0
@@ -299,8 +299,68 @@ class ElectricalPriceCalc(ad.ADBase):
             startTime = self.elpricestoday[index_start]['start']
             endTime = self.elpricestoday[index_start+indexesToFinish-1]['end']
             avgPriceToComplete = priceToComplete
+        avgPriceToComplete = round(avgPriceToComplete/indexesToFinish, 3)
 
-        return startTime, endTime, round(avgPriceToComplete/indexesToFinish, 3)
+        endTime = self._extend_Continuous_Cheapest_EndTime(endTime = endTime,
+                                                           price = avgPriceToComplete,
+                                                           stopAtPriceIncrease = stopAtPriceIncrease)
+
+        final_startTime = self._extend_Continuous_Cheapest_StartTime(startTime = startTime,
+                                                               price = avgPriceToComplete,
+                                                               startBeforePrice = startBeforePrice,
+                                                               stopAtPriceIncrease = stopAtPriceIncrease)
+        timediff =  startTime - final_startTime
+        est_endTime = endTime - timediff
+        return final_startTime, est_endTime, endTime, avgPriceToComplete
+
+    def _extend_Continuous_Cheapest_EndTime(self, endTime, price, stopAtPriceIncrease) -> datetime:
+        """ Extends charging time after estimated finish as long as price is lower than stopAtPriceIncrease
+        """
+        end_times = [item['end'] for item in self.elpricestoday]
+        index_start = bisect.bisect_left(end_times, endTime)
+
+        for i, current in enumerate(self.elpricestoday[index_start:]):
+            original_index = index_start + i
+            next_item = self.elpricestoday[original_index + 1] if original_index < len(self.elpricestoday) - 1 else None
+
+            if next_item is None:
+                return current['end']
+            if price + stopAtPriceIncrease < next_item['value']:
+                return current['end']
+        return endTime
+
+    def _extend_Continuous_Cheapest_StartTime(self, startTime, price, startBeforePrice, stopAtPriceIncrease) -> datetime:
+        """ Check if charging should be postponed one hour or start earlier due to price.
+        """
+        startHourPrice = self.electricity_price_now(startTime)
+        checkTime = self.ADapi.datetime(aware=True).replace(minute = 0, second = 0, microsecond = 0)
+        start_times = [item['start'] for item in self.elpricestoday]
+        index_now = bisect.bisect_left(start_times, checkTime)
+        stop_index = bisect.bisect_left(start_times, startTime)
+
+        for i, current in enumerate(self.elpricestoday[stop_index: stop_index + 4]):
+            original_index = stop_index + i
+            next_item = self.elpricestoday[original_index + 1] if original_index < len(self.elpricestoday) - 1 else None
+            if current['start'] - startTime <= datetime.timedelta(hours = 1):
+                if (
+                    price < startHourPrice - (stopAtPriceIncrease * 1.5)
+                    and startHourPrice < next_item['value'] - (stopAtPriceIncrease * 1.3)
+                ):
+                    return next_item['start']
+
+        for i, current in enumerate(reversed(self.elpricestoday[index_now:stop_index + 1])):
+            original_index = stop_index - i
+            prev_item = self.elpricestoday[original_index - 1] if original_index > 0 else None
+            if prev_item is None:
+                return current['start']
+
+            if (
+                startHourPrice + startBeforePrice < prev_item['value']
+                or price + (startBeforePrice * 2) < prev_item['value']
+            ):
+                return current['start']
+
+        return startTime
 
     def get_lowest_prices(self,
                           checkitem:int = 1,
