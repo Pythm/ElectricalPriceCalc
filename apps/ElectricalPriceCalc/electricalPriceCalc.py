@@ -266,7 +266,7 @@ class ElectricalPriceCalc(ad.ADBase):
             and len(self.elpricestoday) == self.todayslength
             and not calculateBeforeNextDayPrices
         ):
-            return None, None, self.sorted_elprices_today[indexesToFinish]
+            return None, None, None, self.sorted_elprices_today[indexesToFinish]
 
         priceToComplete:float = 0.0
         avgPriceToComplete:float = 1000.0
@@ -609,8 +609,6 @@ class ElectricalPriceCalc(ad.ADBase):
                 if continuous_hours_from_old_calc < 0:
                     continuous_hours_from_old_calc = 0
 
-
-        self.ADapi.log(f"Concluded with peak cont form old: {continuous_hours_from_old_calc}") ###
         return saving_hours_list, math.ceil(continuous_hours_from_old_calc)
 
     def _calc_remove_hours_after_last_peak(self,
