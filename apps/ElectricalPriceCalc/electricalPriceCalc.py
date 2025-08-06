@@ -277,12 +277,11 @@ class ElectricalPriceCalc(ad.ADBase):
 
         index_start = bisect.bisect_left(start_times, checkTime)
         index_end = bisect.bisect_right(end_times, finishAt)
-        index_end -= indexesToFinish
-
         startTime = None
         endTime = None
 
-        if index_start < index_end:
+        if index_start < index_end - indexesToFinish:
+            index_end -= indexesToFinish
             while index_start <= index_end:
                 for item in self.elpricestoday[index_start:index_start + indexesToFinish]:
                     priceToComplete += item['value']
@@ -294,10 +293,14 @@ class ElectricalPriceCalc(ad.ADBase):
                 priceToComplete = 0.0
                 index_start += 1
         else:
-            for item in self.elpricestoday[index_start:index_start + indexesToFinish]:
+            if index_start + indexesToFinish > len(self.elpricestoday):
+                index_end = len(self.elpricestoday)
+            else:
+                index_end = index_end
+            for item in self.elpricestoday[index_start:index_end]:
                 priceToComplete += item['value']
             startTime = self.elpricestoday[index_start]['start']
-            endTime = self.elpricestoday[index_start+indexesToFinish-1]['end']
+            endTime = self.elpricestoday[index_end-1]['end']
             avgPriceToComplete = priceToComplete
         avgPriceToComplete = round(avgPriceToComplete/indexesToFinish, 3)
 
