@@ -85,10 +85,11 @@ electricalPriceCalc:
 
 ## 📌 Notes
 
-- `country_code` will attempt to fetch latitude/longitude from your AppDaemon configuration if not defined.
+- `country_code` is used to find hollidays. Will attempt to fetch latitude/longitude from your AppDaemon configuration if not defined.
 - `VAT` is specified as a multiplier (e.g., 1.25 represents 25% VAT) and is applied only to Nordpool Price before adding the other taxes.
 - Taxes and thresholds are optional and can be customized based on your region.
-- `daytax` and `nighttax` can be an int or a dict with month numbers : tax
+- Add tax per kWh from your electricity grid provider with `daytax` and `nighttax`. Night tax applies from 22:00 to 06:00 on workdays and all day on weekends and hollidays. Can be a float or a dict with month number and tax like example above.
+- In Norway, we receive 90% electricity support (Strømstøtte) on electricity prices above 0.70 kr exclusive / 0.9125 kr inclusive VAT (MVA) calculated per hour. Define `power_support_above` and `support_amount` to have calculations take the support into account. Do not define if not applicable.
 ---
 
 ## ✅ Contributing
@@ -112,12 +113,15 @@ Contributions are welcome! Please open an issue or submit a pull request.
 
     price_now = ELECTRICITYPRICE.electricity_price_now()
 
-    ChargingAt, estimateStop, price = ELECTRICITYPRICE.get_Continuous_Cheapest_Time(
-        hoursTotal = 3,
-        calculateBeforeNextDayPrices = False,
-        finishByHour = 7
-    )
+    startAt, estimateStop, stopNoLaterThan, price = ELECTRICITYPRICE.get_Continuous_Cheapest_Time(
+            hoursTotal = 2,
+            calculateBeforeNextDayPrices = False,
+            finishByHour = 7,
+            startBeforePrice = 0.01, 
+            stopAtPriceIncrease = 0.01
+        )
 
+    time_to_save:list = []
     time_to_save = ELECTRICITYPRICE.find_times_to_save(
         pricedrop = 0.08,
         max_continuous_hours = 12,
