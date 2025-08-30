@@ -293,7 +293,7 @@ class ElectricalPriceCalc(ad.ADBase):
                 priceToComplete = 0.0
                 index_start += 1
         else:
-            if index_start + indexesToFinish >= len(self.elpricestoday):
+            if index_start + indexesToFinish > len(self.elpricestoday):
                 index_end = len(self.elpricestoday)
             else:
                 index_end = index_end
