@@ -378,10 +378,12 @@ class ElectricalPriceCalc(ad.ADBase):
                 if self.sorted_elprices_today[hours] < self.sorted_elprices_today[0] + min_change:
                     return self.sorted_elprices_today[0] + min_change
             return self.sorted_elprices_today[hours]
-        else:
+        elif self.tomorrow_valid:
             if min_change is not None:
                 if self.sorted_elprices_tomorrow[hours] < self.sorted_elprices_tomorrow[0] + min_change:
                     return self.sorted_elprices_tomorrow[0] + min_change
+        if hours >= len(self.sorted_elprices_tomorrow):
+            hours = len(self.sorted_elprices_tomorrow) -2
         return self.sorted_elprices_tomorrow[hours]
 
     def find_times_to_save(self,
