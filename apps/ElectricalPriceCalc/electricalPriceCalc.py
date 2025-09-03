@@ -279,6 +279,7 @@ class ElectricalPriceCalc(ad.ADBase):
         index_end = bisect.bisect_right(end_times, finishAt)
         startTime = None
         endTime = None
+        start_at_index = index_start
 
         if index_start < index_end - indexesToFinish:
             index_end -= indexesToFinish
@@ -289,6 +290,7 @@ class ElectricalPriceCalc(ad.ADBase):
                     avgPriceToComplete = priceToComplete
                     startTime = self.elpricestoday[index_start]['start']
                     endTime = self.elpricestoday[index_start+indexesToFinish-1]['end']
+                    start_at_index = index_start
 
                 priceToComplete = 0.0
                 index_start += 1
@@ -304,12 +306,19 @@ class ElectricalPriceCalc(ad.ADBase):
             avgPriceToComplete = priceToComplete
         avgPriceToComplete = round(avgPriceToComplete/indexesToFinish, 3)
 
+        #Get highest price:
+        highest_price = avgPriceToComplete
+        for item in self.elpricestoday[start_at_index:start_at_index+indexesToFinish]:
+            if highest_price < item['value']:
+                highest_price = item['value']
+
+
         endTime = self._extend_Continuous_Cheapest_EndTime(endTime = endTime,
-                                                           price = avgPriceToComplete,
+                                                           price = highest_price,
                                                            stopAtPriceIncrease = stopAtPriceIncrease)
 
         final_startTime = self._extend_Continuous_Cheapest_StartTime(startTime = startTime,
-                                                               price = avgPriceToComplete,
+                                                               price = highest_price,
                                                                startBeforePrice = startBeforePrice,
                                                                stopAtPriceIncrease = stopAtPriceIncrease)
         timediff =  startTime - final_startTime
@@ -377,14 +386,13 @@ class ElectricalPriceCalc(ad.ADBase):
             if min_change is not None:
                 if self.sorted_elprices_today[hours] < self.sorted_elprices_today[0] + min_change:
                     return self.sorted_elprices_today[0] + min_change
-            return self.sorted_elprices_today[hours]
         elif self.tomorrow_valid:
             if min_change is not None:
                 if self.sorted_elprices_tomorrow[hours] < self.sorted_elprices_tomorrow[0] + min_change:
                     return self.sorted_elprices_tomorrow[0] + min_change
-        if hours >= len(self.sorted_elprices_tomorrow):
-            hours = len(self.sorted_elprices_tomorrow) -2
-        return self.sorted_elprices_tomorrow[hours]
+            return self.sorted_elprices_tomorrow[hours]
+        
+        return self.sorted_elprices_today[hours]
 
     def find_times_to_save(self,
                            pricedrop: float,
