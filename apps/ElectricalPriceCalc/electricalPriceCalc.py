@@ -3,7 +3,7 @@
     @Pythm / https://github.com/Pythm
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from appdaemon import adbase as ad
 import datetime

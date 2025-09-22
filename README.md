@@ -90,6 +90,7 @@ electricalPriceCalc:
 - Taxes and thresholds are optional and can be customized based on your region.
 - Add tax per kWh from your electricity grid provider with `daytax` and `nighttax`. Night tax applies from 22:00 to 06:00 on workdays and all day on weekends and hollidays. Can be a float or a dict with month number and tax like example above.
 - In Norway, we receive 90% electricity support (Strømstøtte) on electricity prices above 0.70 kr exclusive / 0.9125 kr inclusive VAT (MVA) calculated per hour. Define `power_support_above` and `support_amount` to have calculations take the support into account. Do not define if not applicable.
+- In Norway, we can also choose **“Norgespris,”** a fixed‑price option. Configure the price with `fixedprice` instead of `pricearea`. If you are in an area with a fixed electricity price and only want to use [ad‑ElectricalManagement](https://github.com/Pythm/ad-ElectricalManagement) to stay below a maximum kW per‑hour usage, this setting is the right choice.
 ---
 
 ## ✅ Contributing
