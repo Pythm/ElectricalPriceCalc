@@ -413,7 +413,7 @@ class ElectricalPriceCalc(ad.ADBase):
     def get_lowest_prices(self,
                           checkitem:int = 1,
                           hours:int = 6,
-                          min_change:float = 0.1
+                          min_change:float = None
                           ) -> float:
         """ Compares the X hour lowest price to a minimum change and retuns the highest price of those two.
         """
@@ -447,6 +447,7 @@ class ElectricalPriceCalc(ad.ADBase):
 
         saving_hours_list:list = []
         continuous_hours_from_old_calc = 0
+        on_for_minimum = ((on_for_minimum)/ self.todayslength) * 24
 
         if previous_save_hours:
             saving_hours_list, continuous_hours_from_old_calc = self._keep_already_calculated_save_hours(
@@ -515,7 +516,7 @@ class ElectricalPriceCalc(ad.ADBase):
             elif (
                 next_item['value'] - current['value'] >= (priceincrease * 0.6)
                 and next_item['value'] - prev_item['value'] >= (priceincrease * 1.4)
-                and prev_item['value'] <= self.get_lowest_prices(checkitem = original_index, hours = 3, min_change = 0.1)
+                and prev_item['value'] <= self.get_lowest_prices(checkitem = original_index, hours = 3, min_change = None)
                 and not prev_item['start'] in low_priced_items
             ):
                 low_priced_items.append(prev_item['start'])
@@ -782,9 +783,6 @@ class ElectricalPriceCalc(ad.ADBase):
 
                 continuous_hours = datetime.timedelta(0)
                 peakdiff = pricedrop
-            elif continue_from_peak: ###
-                self.ADapi.log(f"Found no entry in calculating peak hours in: {stop_calculating_at - i -1}. Continue should not be true?") ###
-                continue_from_peak = False ###
 
             if continuous_hours_int > 0:
                 difference = max_continuous_hours - continuous_hours_int
@@ -866,52 +864,53 @@ class ElectricalPriceCalc(ad.ADBase):
 
         index_start = bisect.bisect_left(start_times, start_peak_time)
         index_end = bisect.bisect_right(end_times, last_peak_end_time)
-        price_start = self.elpricestoday[index_start]['value']
-        price_end = self.elpricestoday[index_end]['value']
         continuous_items_to_remove =  int((continuous_hours_to_remove/24 * self.todayslength))
 
-        while continuous_items_to_remove > 0:
+        
+        # Find the least expencive hour in peak_hour.
+        list_with_lower_prices:list = []
+        price_start = self.elpricestoday[index_start]['value']
+        price_end = self.elpricestoday[index_end]['value']
+        for i, current in enumerate(self.elpricestoday[index_start:index_end]):
+            if (
+                current['value'] < price_start
+                and current['value'] < price_end
+            ):
+                original_index = index_start + i
+                list_with_lower_prices.append(original_index)
+                self.ADapi.log(
+                    f"Found {i} : {current['value']} is lower than start {price_start} and stop: {price_end} Original time: {original_index/4}"
+                ) ###
 
-            # Find the least expencive hour in peak_hour.
-            list_with_lower_prices:list = []
+        if list_with_lower_prices:
+            sorted_list = sorted(self.elpricestoday[index_start:index_end], key=lambda x: x['value'])
+            remove_price_below = sorted_list[len(list_with_lower_prices)]['value']
+            self.ADapi.log(f"Remove price below: {remove_price_below}") ###
+
+            index_start_corrected = index_start
             for i, current in enumerate(self.elpricestoday[index_start:index_end]):
-                if (
-                    current['value'] < price_start
-                    and current['value'] < price_end
-                ):
-                    list_with_lower_prices.append(i)
+                if current['value'] <= remove_price_below:
+                    if current['start'] in saving_hours_list:
+                        self.ADapi.log(f"Remove {current['start']} in too many continuous hours") ###
+                        saving_hours_list.remove(current['start'])
+                        continuous_items_to_remove -= 1
+                    if i == index_start_corrected - index_start:
+                        index_start_corrected += 1
+            if (
+                continuous_items_to_remove <= 0 
+                or reset_continuous_hours
+            ):
+                return saving_hours_list, last_peak_end_time
+            
+            for current in reversed(self.elpricestoday[index_start_corrected:index_end]):
+                if not current['start'] in saving_hours_list:
+                    index_end -= 1
+                    last_peak_end_time = current['start']
+                else:
+                    break
+            index_start = index_start_corrected
 
-            if list_with_lower_prices:
-                sorted_list = sorted(self.elpricestoday[index_start:index_end], key=lambda x: x['value'])
-                remove_price_below = sorted_list[list_with_lower_prices]
-
-                if len(list_with_lower_prices) > continuous_items_to_remove:
-                    remove_price_below = sorted_list[continuous_items_to_remove]
-
-                index_start_corrected = index_start
-                for i, current in enumerate(self.elpricestoday[index_start:index_end]):
-                    if current['value'] <= remove_price_below:
-                        if current['start'] in saving_hours_list:
-                            self.ADapi.log(f"Remove {current['start']} in too many continuous hours") ###
-                            saving_hours_list.remove(current['start'])
-                            continuous_items_to_remove -= 1
-                        if i == index_start_corrected - index_start:
-                            index_start_corrected += 1
-                if (
-                    continuous_items_to_remove <= 0 
-                    or reset_continuous_hours
-                ):
-                    return saving_hours_list, last_peak_end_time
-                
-                for current in reversed(self.elpricestoday[index_start_corrected:index_end]):
-                    if not current['start'] in saving_hours_list:
-                        index_end -= 1
-                        last_peak_end_time = current['start']
-                    else:
-                        break
-                index_start = index_start_corrected
-
-
+        while continuous_items_to_remove > 0:
             start_pricedrop:float = self._calculate_difference_over_given_time(
                 pricedrop = pricedrop,
                 multiplier = pricedifference_increase,
