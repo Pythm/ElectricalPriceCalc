@@ -54,13 +54,17 @@ class ElectricalPriceCalc(ad.ADBase):
         self.todayslength:int = 0
         self.tomorrow_valid = True
 
-        if 'pricearea' in self.args:
+        if 'fixedprice' in self.args:
+            self.ADapi.run_daily(self._create_daily_prices_with_taxes, "00:01:00", price = self.args['fixedprice'], tomorrow = False)
+            self.ADapi.run_daily(self._create_daily_prices_with_taxes, "13:00:00", price = self.args['fixedprice'], tomorrow = True)
+
+        elif 'pricearea' in self.args:
             self.pricearea = self.args['pricearea']
             self.currency = self.args.get('currency', 'EUR')
             self.VAT = self.args.get('VAT', 1.25)
             self.prices_spot = elspot.Prices(self.currency)
             self._fetchNordpoolSpotPrices(0)
-            self.ADapi.run_daily(self._fetchNordpoolSpotPrices, "00:00:01")
+            self.ADapi.run_daily(self._fetchNordpoolSpotPrices, "00:01:00")
             self.ADapi.run_daily(self._fetchNordpoolSpotPrices, "13:00:00")
             
         elif 'nordpool' in self.args:
@@ -163,6 +167,38 @@ class ElectricalPriceCalc(ad.ADBase):
             item['start'] = self.ADapi.convert_utc(item['start'])
             item['end'] = self.ADapi.convert_utc(item['end'])
         return nordpool_prices
+
+    def _create_daily_prices_with_taxes(self, kwargs) -> None:
+        price = kwargs['price']
+        tomorrow = kwargs['tomorrow']
+        nordpool_todays_prices:list = self.create_time_slots(today=True, price = price)
+        if tomorrow:
+            nordpool_tomorrow_prices:list = self.create_time_slots(today=False, price = price)
+        else:
+            nordpool_tomorrow_prices:list = []
+
+        self._calculatePrices(nordpool_todays_prices = nordpool_todays_prices,
+                              nordpool_tomorrow_prices = nordpool_tomorrow_prices)
+
+    def create_time_slots(self, today, price):
+        now = self.ADapi.datetime(aware=True)
+        if today:
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            tomorrow = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            start_date = tomorrow
+        time_slots = []
+
+        for i in range(24):
+            start_time = start_date + timedelta(hours=i)
+            end_time = start_time + timedelta(hours=1)
+
+            time_slots.append({
+                'start': start_utc,
+                'end': end_utc,
+                'value': price
+            })
+        return time_slots
 
     # Calculates taxes and adjusts datetime
     def _calculatePrices(self,
@@ -279,6 +315,7 @@ class ElectricalPriceCalc(ad.ADBase):
         index_end = bisect.bisect_right(end_times, finishAt)
         startTime = None
         endTime = None
+        start_at_index = index_start
 
         if index_start < index_end - indexesToFinish:
             index_end -= indexesToFinish
@@ -289,6 +326,7 @@ class ElectricalPriceCalc(ad.ADBase):
                     avgPriceToComplete = priceToComplete
                     startTime = self.elpricestoday[index_start]['start']
                     endTime = self.elpricestoday[index_start+indexesToFinish-1]['end']
+                    start_at_index = index_start
 
                 priceToComplete = 0.0
                 index_start += 1
@@ -304,12 +342,19 @@ class ElectricalPriceCalc(ad.ADBase):
             avgPriceToComplete = priceToComplete
         avgPriceToComplete = round(avgPriceToComplete/indexesToFinish, 3)
 
+        #Get highest price:
+        highest_price = avgPriceToComplete
+        for item in self.elpricestoday[start_at_index:start_at_index+indexesToFinish]:
+            if highest_price < item['value']:
+                highest_price = item['value']
+
+
         endTime = self._extend_Continuous_Cheapest_EndTime(endTime = endTime,
-                                                           price = avgPriceToComplete,
+                                                           price = highest_price,
                                                            stopAtPriceIncrease = stopAtPriceIncrease)
 
         final_startTime = self._extend_Continuous_Cheapest_StartTime(startTime = startTime,
-                                                               price = avgPriceToComplete,
+                                                               price = highest_price,
                                                                startBeforePrice = startBeforePrice,
                                                                stopAtPriceIncrease = stopAtPriceIncrease)
         timediff =  startTime - final_startTime
@@ -368,7 +413,7 @@ class ElectricalPriceCalc(ad.ADBase):
     def get_lowest_prices(self,
                           checkitem:int = 1,
                           hours:int = 6,
-                          min_change:float = 0.1
+                          min_change:float = None
                           ) -> float:
         """ Compares the X hour lowest price to a minimum change and retuns the highest price of those two.
         """
@@ -377,14 +422,13 @@ class ElectricalPriceCalc(ad.ADBase):
             if min_change is not None:
                 if self.sorted_elprices_today[hours] < self.sorted_elprices_today[0] + min_change:
                     return self.sorted_elprices_today[0] + min_change
-            return self.sorted_elprices_today[hours]
         elif self.tomorrow_valid:
             if min_change is not None:
                 if self.sorted_elprices_tomorrow[hours] < self.sorted_elprices_tomorrow[0] + min_change:
                     return self.sorted_elprices_tomorrow[0] + min_change
-        if hours >= len(self.sorted_elprices_tomorrow):
-            hours = len(self.sorted_elprices_tomorrow) -2
-        return self.sorted_elprices_tomorrow[hours]
+            return self.sorted_elprices_tomorrow[hours]
+        
+        return self.sorted_elprices_today[hours]
 
     def find_times_to_save(self,
                            pricedrop: float,
@@ -403,11 +447,9 @@ class ElectricalPriceCalc(ad.ADBase):
 
         saving_hours_list:list = []
         continuous_hours_from_old_calc = 0
+        on_for_minimum = ((on_for_minimum)/ self.todayslength) * 24
 
-        if (
-            len(self.elpricestoday) > self.todayslength
-            and previous_save_hours
-        ):
+        if previous_save_hours:
             saving_hours_list, continuous_hours_from_old_calc = self._keep_already_calculated_save_hours(
                 previous_save_hours = previous_save_hours,
                 reset_continuous_hours = reset_continuous_hours,
@@ -474,7 +516,7 @@ class ElectricalPriceCalc(ad.ADBase):
             elif (
                 next_item['value'] - current['value'] >= (priceincrease * 0.6)
                 and next_item['value'] - prev_item['value'] >= (priceincrease * 1.4)
-                and prev_item['value'] <= self.get_lowest_prices(checkitem = original_index, hours = 3, min_change = 0.1)
+                and prev_item['value'] <= self.get_lowest_prices(checkitem = original_index, hours = 3, min_change = None)
                 and not prev_item['start'] in low_priced_items
             ):
                 low_priced_items.append(prev_item['start'])
@@ -822,31 +864,32 @@ class ElectricalPriceCalc(ad.ADBase):
 
         index_start = bisect.bisect_left(start_times, start_peak_time)
         index_end = bisect.bisect_right(end_times, last_peak_end_time)
-        price_start = self.elpricestoday[index_start]['value']
-        price_end = self.elpricestoday[index_end]['value']
         continuous_items_to_remove =  int((continuous_hours_to_remove/24 * self.todayslength))
 
+        
         # Find the least expencive hour in peak_hour.
         list_with_lower_prices:list = []
+        price_start = self.elpricestoday[index_start]['value']
+        price_end = self.elpricestoday[index_end]['value']
         for i, current in enumerate(self.elpricestoday[index_start:index_end]):
             if (
                 current['value'] < price_start
                 and current['value'] < price_end
             ):
-                list_with_lower_prices.append(i)
+                original_index = index_start + i
+                list_with_lower_prices.append(original_index)
 
         if list_with_lower_prices:
             sorted_list = sorted(self.elpricestoday[index_start:index_end], key=lambda x: x['value'])
-            remove_price_below = sorted_list[list_with_lower_prices]
-
-            if len(list_with_lower_prices) > continuous_items_to_remove:
-                remove_price_below = sorted_list[continuous_items_to_remove]
+            remove_price_below = sorted_list[len(list_with_lower_prices)]['value']
 
             index_start_corrected = index_start
             for i, current in enumerate(self.elpricestoday[index_start:index_end]):
                 if current['value'] <= remove_price_below:
-                    saving_hours_list.remove(current['start'])
-                    continuous_items_to_remove -= 1
+                    if current['start'] in saving_hours_list:
+                        saving_hours_list.remove(current['start'])
+                        continuous_items_to_remove -= 1
+
                     if i == index_start_corrected - index_start:
                         index_start_corrected += 1
             if (
@@ -863,26 +906,6 @@ class ElectricalPriceCalc(ad.ADBase):
                     break
             index_start = index_start_corrected
 
-        saving_hours_list, last_peak_end_time = self._remove_first_or_last_saving_hour(
-            saving_hours_list = saving_hours_list,
-            pricedrop = pricedrop,
-            pricedifference_increase = pricedifference_increase,
-            continuous_items_to_remove = continuous_items_to_remove,
-            index_start = index_start,
-            index_end = index_end,
-            last_peak_end_time = last_peak_end_time
-        )
-        return saving_hours_list, last_peak_end_time
-
-    def _remove_first_or_last_saving_hour(self,
-                                         saving_hours_list:list,
-                                         pricedrop:float,
-                                         pricedifference_increase:float,
-                                         continuous_items_to_remove:int,
-                                         index_start:int,
-                                         index_end:int,
-                                         last_peak_end_time:datetime
-                                         ):
         while continuous_items_to_remove > 0:
             start_pricedrop:float = self._calculate_difference_over_given_time(
                 pricedrop = pricedrop,
