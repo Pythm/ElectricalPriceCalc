@@ -55,8 +55,13 @@ class ElectricalPriceCalc(ad.ADBase):
         self.tomorrow_valid = True
 
         if 'fixedprice' in self.args:
-            self.ADapi.run_daily(self._create_daily_prices_with_taxes, "00:01:00", price = self.args['fixedprice'], tomorrow = False)
-            self.ADapi.run_daily(self._create_daily_prices_with_taxes, "13:00:00", price = self.args['fixedprice'], tomorrow = True)
+            fixedprice = self.args['fixedprice']
+            if self.ADapi.now_is_between('13:00:00', '23:59:59'):
+                self._create_daily_prices_with_taxes(price = fixedprice, tomorrow = True)
+            else:
+                self._create_daily_prices_with_taxes(price = fixedprice, tomorrow = False)
+            self.ADapi.run_daily(self._create_daily_prices_with_taxes, "00:01:00", price = fixedprice, tomorrow = False)
+            self.ADapi.run_daily(self._create_daily_prices_with_taxes, "13:00:00", price = fixedprice, tomorrow = True)
 
         elif 'pricearea' in self.args:
             self.pricearea = self.args['pricearea']
@@ -168,7 +173,7 @@ class ElectricalPriceCalc(ad.ADBase):
             item['end'] = self.ADapi.convert_utc(item['end'])
         return nordpool_prices
 
-    def _create_daily_prices_with_taxes(self, kwargs) -> None:
+    def _create_daily_prices_with_taxes(self, **kwargs) -> None:
         price = kwargs['price']
         tomorrow = kwargs['tomorrow']
         nordpool_todays_prices:list = self.create_time_slots(today=True, price = price)
@@ -190,12 +195,12 @@ class ElectricalPriceCalc(ad.ADBase):
         time_slots = []
 
         for i in range(24):
-            start_time = start_date + timedelta(hours=i)
-            end_time = start_time + timedelta(hours=1)
+            start_time = start_date + datetime.timedelta(hours=i)
+            end_time = start_time + datetime.timedelta(hours=1)
 
             time_slots.append({
-                'start': start_utc,
-                'end': end_utc,
+                'start': start_time,
+                'end': end_time,
                 'value': price
             })
         return time_slots
