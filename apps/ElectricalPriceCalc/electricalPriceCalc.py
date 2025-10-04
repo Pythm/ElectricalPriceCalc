@@ -56,7 +56,9 @@ class ElectricalPriceCalc(ad.ADBase):
 
         if 'fixedprice' in self.args:
             fixedprice = self.args['fixedprice']
-            if self.ADapi.now_is_between('13:00:00', '23:59:59'):
+            self.currency = self.args.get('currency', 'EUR')
+            self.VAT = self.args.get('VAT', 0)
+            if self.ADapi.now_is_between('12:50:00', '23:59:59'):
                 self._create_daily_prices_with_taxes(price = fixedprice, tomorrow = True)
             else:
                 self._create_daily_prices_with_taxes(price = fixedprice, tomorrow = False)
@@ -140,6 +142,7 @@ class ElectricalPriceCalc(ad.ADBase):
         nordpool_tomorrow_prices:list = []
 
         # Todays prices
+        self.currency = self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'currency')
         try:
             todays_prices = self.ADapi.get_state(entity_id = self.nordpool_prices, attribute = 'raw_today')
         except Exception as e:
