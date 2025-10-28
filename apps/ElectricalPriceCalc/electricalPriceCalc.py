@@ -191,23 +191,30 @@ class ElectricalPriceCalc(ad.ADBase):
 
     def create_time_slots(self, today, price):
         now = self.ADapi.datetime(aware=True)
+        tz  = now.tzinfo
+
         if today:
-            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         else:
-            tomorrow = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            start_date = tomorrow
-        time_slots = []
+            start_day = (now + datetime.timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
 
-        for i in range(24):
-            start_time = start_date + datetime.timedelta(hours=i)
-            end_time = start_time + datetime.timedelta(hours=1)
+        end_day = start_day + datetime.timedelta(days=1)
 
-            time_slots.append({
-                'start': start_time,
-                'end': end_time,
-                'value': price
+        slots = []
+        cur = start_day
+        while cur < end_day:
+            nxt = cur + datetime.timedelta(hours=1)
+
+            slots.append({
+                "start": cur,
+                "end":   nxt,
+                "value": price,
             })
-        return time_slots
+            cur = nxt
+
+        return slots
 
     # Calculates taxes and adjusts datetime
     def _calculatePrices(self,
@@ -357,7 +364,7 @@ class ElectricalPriceCalc(ad.ADBase):
             avgPriceToComplete = priceToComplete
         avgPriceToComplete = round(avgPriceToComplete/indexesToFinish, 3)
 
-        #Get highest price:
+        # Get highest price:
         highest_price = avgPriceToComplete
         for item in self.elpricestoday[start_at_index:start_at_index+indexesToFinish]:
             if highest_price < item.value:
