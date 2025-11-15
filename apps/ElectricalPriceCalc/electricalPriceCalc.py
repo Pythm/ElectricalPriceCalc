@@ -304,7 +304,7 @@ class ElectricalPriceCalc(ad.ADBase):
                                      finishByHour:int = 7,
                                      startBeforePrice:float = 0.01,
                                      stopAtPriceIncrease:float = 0.01
-                                     ) -> Tuple[datetime, datetime, datetime, float]:
+                                     ) -> Tuple[datetime, datetime, float]:
         """ Returns starttime, estimated endtime, Final endtime and price for cheapest continuous hours,
             with different results depenting on time the call was made. """
 
@@ -371,7 +371,6 @@ class ElectricalPriceCalc(ad.ADBase):
             if highest_price < item.value:
                 highest_price = item.value
 
-
         endTime = self._extend_Continuous_Cheapest_EndTime(endTime = endTime,
                                                            price = highest_price,
                                                            stopAtPriceIncrease = stopAtPriceIncrease)
@@ -381,8 +380,7 @@ class ElectricalPriceCalc(ad.ADBase):
                                                                startBeforePrice = startBeforePrice,
                                                                stopAtPriceIncrease = stopAtPriceIncrease)
         timediff =  startTime - final_startTime
-        est_endTime = endTime - timediff
-        return final_startTime, est_endTime, endTime, avgPriceToComplete
+        return final_startTime, endTime, avgPriceToComplete
 
     def _extend_Continuous_Cheapest_EndTime(self, endTime, price, stopAtPriceIncrease) -> datetime:
         end_times = [item.end for item in self.elpricestoday]
