@@ -325,7 +325,7 @@ class ElectricalPriceCalc(ad.ADBase):
             and len(self.elpricestoday) == self.todayslength
             and not calculateBeforeNextDayPrices
         ):
-            return None, None, None, self.sorted_elprices_today[indexesToFinish]
+            return None, None, self.sorted_elprices_today[indexesToFinish]
 
         priceToComplete:float = 0.0
         avgPriceToComplete:float = 1000.0
