@@ -114,7 +114,7 @@ Contributions are welcome! Please open an issue or submit a pull request.
 
     price_now = ELECTRICITYPRICE.electricity_price_now()
 
-    startAt, estimateStop, stopNoLaterThan, price = ELECTRICITYPRICE.get_Continuous_Cheapest_Time(
+    startAt, stopNoLaterThan, price = ELECTRICITYPRICE.get_Continuous_Cheapest_Time(
             hoursTotal = 2,
             calculateBeforeNextDayPrices = False,
             finishByHour = 7,

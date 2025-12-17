@@ -3,7 +3,7 @@
     @Pythm / https://github.com/Pythm
 """
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 from appdaemon import adbase as ad
 import datetime
@@ -191,23 +191,30 @@ class ElectricalPriceCalc(ad.ADBase):
 
     def create_time_slots(self, today, price):
         now = self.ADapi.datetime(aware=True)
+        tz  = now.tzinfo
+
         if today:
-            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         else:
-            tomorrow = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            start_date = tomorrow
-        time_slots = []
+            start_day = (now + datetime.timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
 
-        for i in range(24):
-            start_time = start_date + datetime.timedelta(hours=i)
-            end_time = start_time + datetime.timedelta(hours=1)
+        end_day = start_day + datetime.timedelta(days=1)
 
-            time_slots.append({
-                'start': start_time,
-                'end': end_time,
-                'value': price
+        slots = []
+        cur = start_day
+        while cur < end_day:
+            nxt = cur + datetime.timedelta(hours=1)
+
+            slots.append({
+                "start": cur,
+                "end":   nxt,
+                "value": price,
             })
-        return time_slots
+            cur = nxt
+
+        return slots
 
     # Calculates taxes and adjusts datetime
     def _calculatePrices(self,
@@ -297,9 +304,10 @@ class ElectricalPriceCalc(ad.ADBase):
                                      finishByHour:int = 7,
                                      startBeforePrice:float = 0.01,
                                      stopAtPriceIncrease:float = 0.01
-                                     ) -> Tuple[datetime, datetime, datetime, float]:
-        """ Returns starttime, estimated endtime, Final endtime and price for cheapest continuous hours with different results depenting on time the call was made.
-        """
+                                     ) -> Tuple[datetime, datetime, float]:
+        """ Returns starttime, estimated endtime, Final endtime and price for cheapest continuous hours,
+            with different results depenting on time the call was made. """
+
         indexesToFinish = math.ceil(hoursTotal / 24 * self.todayslength)
         if indexesToFinish == 0:
             indexesToFinish = 1
@@ -317,7 +325,7 @@ class ElectricalPriceCalc(ad.ADBase):
             and len(self.elpricestoday) == self.todayslength
             and not calculateBeforeNextDayPrices
         ):
-            return None, None, None, self.sorted_elprices_today[indexesToFinish]
+            return None, None, self.sorted_elprices_today[indexesToFinish]
 
         priceToComplete:float = 0.0
         avgPriceToComplete:float = 1000.0
@@ -357,12 +365,11 @@ class ElectricalPriceCalc(ad.ADBase):
             avgPriceToComplete = priceToComplete
         avgPriceToComplete = round(avgPriceToComplete/indexesToFinish, 3)
 
-        #Get highest price:
+        # Get highest price:
         highest_price = avgPriceToComplete
         for item in self.elpricestoday[start_at_index:start_at_index+indexesToFinish]:
             if highest_price < item.value:
                 highest_price = item.value
-
 
         endTime = self._extend_Continuous_Cheapest_EndTime(endTime = endTime,
                                                            price = highest_price,
@@ -373,12 +380,9 @@ class ElectricalPriceCalc(ad.ADBase):
                                                                startBeforePrice = startBeforePrice,
                                                                stopAtPriceIncrease = stopAtPriceIncrease)
         timediff =  startTime - final_startTime
-        est_endTime = endTime - timediff
-        return final_startTime, est_endTime, endTime, avgPriceToComplete
+        return final_startTime, endTime, avgPriceToComplete
 
     def _extend_Continuous_Cheapest_EndTime(self, endTime, price, stopAtPriceIncrease) -> datetime:
-        """ Extends charging time after estimated finish as long as price is lower than stopAtPriceIncrease
-        """
         end_times = [item.end for item in self.elpricestoday]
         index_start = bisect.bisect_left(end_times, endTime)
 
@@ -393,8 +397,6 @@ class ElectricalPriceCalc(ad.ADBase):
         return endTime
 
     def _extend_Continuous_Cheapest_StartTime(self, startTime, price, startBeforePrice, stopAtPriceIncrease) -> datetime:
-        """ Check if charging should be postponed one hour or start earlier due to price.
-        """
         startHourPrice = self.electricity_price_now(startTime)
         checkTime = self.ADapi.datetime(aware=True).replace(minute = 0, second = 0, microsecond = 0)
         start_times = [item.start for item in self.elpricestoday]
@@ -430,8 +432,8 @@ class ElectricalPriceCalc(ad.ADBase):
                           hours:int = 6,
                           min_change:float = None
                           ) -> float:
-        """ Compares the X hour lowest price to a minimum change and retuns the highest price of those two.
-        """
+        """ Compares the X hour lowest price to a minimum change and retuns the highest price of those two. """
+
         hours = int(hours / 24 * self.todayslength)
         if checkitem <= self.todayslength - (2 / 24 * self.todayslength):
             if min_change is not None:
@@ -454,8 +456,8 @@ class ElectricalPriceCalc(ad.ADBase):
                            previous_save_hours: list
                            ) -> list:
         """Finds peak variations in electricity price for saving purposes and returns list with datetime objects;
-           'start', 'end' and 'duration' as a timedelta object for how long the electricity has been off.
-        """
+           'start', 'end' and 'duration' as a timedelta object for how long the electricity has been off. """
+
         checkTime = self.ADapi.datetime(aware=True).replace(minute=0, second=0, microsecond=0)
         start_times = [item.start for item in self.elpricestoday]
         index_now = bisect.bisect_left(start_times, checkTime)
@@ -503,8 +505,9 @@ class ElectricalPriceCalc(ad.ADBase):
     def find_times_to_spend(self,
                             priceincrease:float
                             ) -> list:
-        """ Finds low price variations in electricity price for spending purposes and returns list with datetime objects.
-        """
+        """ Finds low price variations in electricity price for spending purposes.
+            Returns list with datetime objects. """
+
         checkTime = self.ADapi.datetime(aware=True).replace(minute=0, second=0, microsecond=0)
         start_times = [item.start for item in self.elpricestoday]
 
@@ -540,8 +543,8 @@ class ElectricalPriceCalc(ad.ADBase):
         return low_priced_list
 
     def electricity_price_now(self, time = None) -> float:
-        """ Return current complete electricity price based on now or time given
-        """
+        """ Return current complete electricity price based on now or time given. """
+
         if time is None:
             time = self.ADapi.datetime(aware=True)
         for range_item in self.elpricestoday:
@@ -552,10 +555,19 @@ class ElectricalPriceCalc(ad.ADBase):
     def print_peaks(self,
                     saving_hours_list:list = []
                     ) -> None:
-        """ Formats save and spend list to readable string for easy logging/testing of settings.
-        """
+        """ Formats save and spend list to readable string for easy logging/testing of settings. """
+
+        now = self.ADapi.datetime(aware=True)
+        tomorrow_date = (now + datetime.timedelta(days=1)).date()
+        four_p_m = datetime.datetime.combine(
+            tomorrow_date,
+            datetime.time(16, 0, 0),
+            tzinfo=now.tzinfo
+        )
         print_saving_hours_list:str = '\n'
         for item in saving_hours_list:
+            if item.start > four_p_m:
+                break
             print_saving_hours_list += str(
                                 f"Start at {item.start} until {item.end}. Duration {item.duration}.\n"
                             )
