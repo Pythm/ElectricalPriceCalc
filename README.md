@@ -25,7 +25,11 @@ The app calculates:
 
 ## 📦 Dependencies
 
-Install the required packages using `requirements.txt` if your Appdaemon install method does not handle requirements automatically:
+Install the required packages using `requirements.txt` 
+
+- If you run Appdaemon as a Addon in HA you'll have to specify the python packages manually in configuration in the Addon and restart Appdaemon.
+
+- If your Appdaemon install method does not handle requirements automatically:
 
 ```bash
 pip install -r requirements.txt
