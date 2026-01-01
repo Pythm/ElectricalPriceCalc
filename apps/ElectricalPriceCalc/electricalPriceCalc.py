@@ -3,7 +3,7 @@
     @Pythm / https://github.com/Pythm
 """
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 
 from appdaemon import adbase as ad
 import datetime
@@ -889,7 +889,7 @@ class ElectricalPriceCalc(ad.ADBase):
                                          reset_continuous_hours
                                          ):
         start_times = [item.start for item in self.elpricestoday]
-        end_times = [item['end'] for item in self.elpricestoday]
+        end_times = [item.end for item in self.elpricestoday]
 
         index_start = bisect.bisect_left(start_times, start_peak_time)
         index_end = bisect.bisect_right(end_times, last_peak_end_time)
