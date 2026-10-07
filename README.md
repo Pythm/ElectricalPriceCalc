@@ -25,7 +25,11 @@ The app calculates:
 
 ## 📦 Dependencies
 
-Install the required packages using `requirements.txt` 
+Install the required packages using `requirements.txt` (`pydantic` ships with AppDaemon).
+
+- `holidays` is always needed.
+- `nordpool` is only needed with `pricearea`.
+- `geopy` is only needed when `country_code` is omitted (country is then looked up from your AppDaemon latitude/longitude in the background).
 
 - If you run Appdaemon as a Addon in HA you'll have to specify the python packages manually in configuration in the Addon and restart Appdaemon.
 
@@ -89,7 +93,12 @@ electricalPriceCalc:
 
 ## 📌 Notes
 
-- `country_code` is used to find hollidays. Will attempt to fetch latitude/longitude from your AppDaemon configuration if not defined.
+- `country_code` is used to find holidays. If it is missing, the country is looked up in the background from your AppDaemon latitude/longitude. Until it is known (or if it fails) Norwegian holidays are used and a WARNING is logged.
+- Configure at most one of `fixedprice`, `pricearea` or `nordpool`. Without any of them the app looks for a Home Assistant sensor with `nordpool` in its name and logs which one it picked, or a WARNING if none is found.
+- `daytax` and `nighttax` must be a number or a dict covering all months 1-12. Invalid configuration is logged at ERROR and the app does not start.
+- With `fixedprice` the `VAT` setting is ignored: the fixed price is used as given (Norgespris 0.50 already includes VAT). Day/night tax, `additional_tax` are still added.
+- Days with 23 or 25 hours (daylight saving) produce 23 or 25 hourly slots with the correct local times.
+- Price fetching for `pricearea` runs in the background and is retried every 30 minutes on failure (one retry timer at a time).
 - `VAT` is specified as a multiplier (e.g., 1.25 represents 25% VAT) and is applied only to Nordpool Price before adding the other taxes.
 - Taxes and thresholds are optional and can be customized based on your region.
 - Add tax per kWh from your electricity grid provider with `daytax` and `nighttax`. Night tax applies from 22:00 to 06:00 on workdays and all day on weekends and hollidays. Can be a float or a dict with month number and tax like example above.
