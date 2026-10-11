@@ -785,10 +785,17 @@ class ElectricalPriceCalc(ad.ADBase):
             return []
 
     def find_times_to_spend(self,
-                            priceincrease: float
+                            priceincrease: float,
+                            lowest_hours: int | None = None
                             ) -> list[PeakHour]:
         """ Finds low price variations in electricity price for spending purposes.
-            Returns list with datetime objects. """
+            Returns list with datetime objects.
+
+            'lowest_hours': an hour only counts as a spend hour when its price is among the
+            'lowest_hours' lowest hours of the day (SPEND_LOWEST_HOURS, 3, when None or below 1). """
+
+        if lowest_hours is None or lowest_hours < 1:
+            lowest_hours = SPEND_LOWEST_HOURS
 
         snap = self._snapshot
         prices = snap.prices
@@ -805,7 +812,7 @@ class ElectricalPriceCalc(ad.ADBase):
             # Checks if price increases more than wanted peak difference
             if (
                 next_item.value - current.value >= priceincrease
-                and current.value <= self.get_lowest_prices(checkitem=original_index, hours=SPEND_LOWEST_HOURS, min_change=None)
+                and current.value <= self.get_lowest_prices(checkitem=original_index, hours=lowest_hours, min_change=None)
             ):
                 if not current.start in low_priced_items:
                     low_priced_items.append(current.start)
@@ -820,7 +827,7 @@ class ElectricalPriceCalc(ad.ADBase):
                 prev_item is not None
                 and next_item.value - current.value >= (priceincrease * SPEND_SHORT_INCREASE_FACTOR)
                 and next_item.value - prev_item.value >= (priceincrease * SPEND_TWO_HOUR_INCREASE_FACTOR)
-                and prev_item.value <= self.get_lowest_prices(checkitem=original_index, hours=SPEND_LOWEST_HOURS, min_change=None)
+                and prev_item.value <= self.get_lowest_prices(checkitem=original_index, hours=lowest_hours, min_change=None)
                 and not prev_item.start in low_priced_items
             ):
                 low_priced_items.append(prev_item.start)

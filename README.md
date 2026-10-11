@@ -97,6 +97,7 @@ electricalPriceCalc:
 - Configure at most one of `fixedprice`, `pricearea` or `nordpool`. Without any of them the app looks for a Home Assistant sensor with `nordpool` in its name and logs which one it picked, or a WARNING if none is found.
 - `daytax` and `nighttax` must be a number or a dict covering all months 1-12. Invalid configuration is logged at ERROR and the app does not start.
 - With `fixedprice` the `VAT` setting is ignored: the fixed price is used as given (Norgespris 0.50 already includes VAT). Day/night tax, `additional_tax` are still added.
+- `find_times_to_spend(priceincrease, lowest_hours=None)`: an hour before a price increase only counts as a spend hour when its price is among the `lowest_hours` lowest hours of the day. Optional, default 3. ElectricalManagement passes its heater setting `low_price_max_continuous_hours` here.
 - Days with 23 or 25 hours (daylight saving) produce 23 or 25 hourly slots with the correct local times.
 - Price fetching for `pricearea` runs in the background and is retried every 30 minutes on failure (one retry timer at a time).
 - `VAT` is specified as a multiplier (e.g., 1.25 represents 25% VAT) and is applied only to Nordpool Price before adding the other taxes.
@@ -146,6 +147,7 @@ Contributions are welcome! Please open an issue or submit a pull request.
     )
 
     time_to_spend = ELECTRICITYPRICE.find_times_to_spend(
-        priceincrease = 0.5
+        priceincrease = 0.5,
+        lowest_hours = 3  # Optional, default 3. The price must be among the 3 lowest hours of the day
     )
 ```
