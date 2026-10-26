@@ -101,6 +101,7 @@ electricalPriceCalc:
 - With `fixedprice` the `VAT` setting is ignored: the fixed price is used as given (Norgespris 0.50 already includes VAT). Day/night tax, `additional_tax` are still added.
 - `find_times_to_spend(priceincrease, lowest_hours=None)`: an hour before a price increase only counts as a spend hour when its price is among the `lowest_hours` lowest hours of the day. Optional, default 3. ElectricalManagement passes its heater setting `low_price_max_continuous_hours` here.
 - Days with 23 or 25 hours (daylight saving) produce 23 or 25 hourly slots with the correct local times.
+- The daily price refresh (00:01 and 13:00) stays on local clock time across daylight-saving changes. AppDaemon's own `run_daily` drifts by an hour after a change until the app restarts, which made the 00:01 rebuild run at 23:01 and remove tomorrow's prices.
 - Price fetching for `pricearea` runs in the background and is retried every 30 minutes on failure (one retry timer at a time).
 - `VAT` is specified as a multiplier (e.g., 1.25 represents 25% VAT) and is applied only to Nordpool Price before adding the other taxes.
 - Taxes and thresholds are optional and can be customized based on your region.

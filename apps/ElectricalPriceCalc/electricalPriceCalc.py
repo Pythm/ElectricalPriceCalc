@@ -195,8 +195,8 @@ class ElectricalPriceCalc(ad.ADBase):
     def _setup_fixedprice(self, fixedprice: float) -> None:
         tomorrow = self.ADapi.now_is_between(FIXEDPRICE_INIT_TOMORROW_FROM, '23:59:59')
         self._create_daily_prices_with_taxes(price=fixedprice, tomorrow=tomorrow)
-        self.ADapi.run_daily(self._create_daily_prices_with_taxes, DAILY_FETCH_TIME, price=fixedprice, tomorrow=False)
-        self.ADapi.run_daily(self._create_daily_prices_with_taxes, TOMORROW_FETCH_TIME, price=fixedprice, tomorrow=True)
+        self._run_daily_local(self._create_daily_prices_cb, DAILY_FETCH_TIME, price=fixedprice, tomorrow=False)
+        self._run_daily_local(self._create_daily_prices_cb, TOMORROW_FETCH_TIME, price=fixedprice, tomorrow=True)
 
     def _setup_pricearea(self, pricearea: str) -> None:
         try:
@@ -210,14 +210,14 @@ class ElectricalPriceCalc(ad.ADBase):
         self.pricearea = pricearea
         self.prices_spot = elspot.Prices(self.currency)
         self._fetchNordpoolSpotPrices({})
-        self.ADapi.run_daily(self._fetchNordpoolSpotPrices, DAILY_FETCH_TIME)
-        self.ADapi.run_daily(self._fetchNordpoolSpotPrices, TOMORROW_FETCH_TIME)
+        self._run_daily_local(self._fetchNordpoolSpotPrices, DAILY_FETCH_TIME)
+        self._run_daily_local(self._fetchNordpoolSpotPrices, TOMORROW_FETCH_TIME)
 
     def _setup_nordpool_sensor(self, entity_id: str) -> None:
         self.nordpool_prices = entity_id
         self._fetchNordpoolPrices({})
         self.ADapi.listen_state(self._update_price_rundaily, self.nordpool_prices, attribute='tomorrow')
-        self.ADapi.run_daily(self._fetchNordpoolPrices, DAILY_FETCH_TIME)
+        self._run_daily_local(self._fetchNordpoolPrices, DAILY_FETCH_TIME)
 
     def _setup_nordpool_autodiscover(self) -> None:
         sensors = self.ADapi.get_state('sensor') or {}
@@ -374,6 +374,30 @@ class ElectricalPriceCalc(ad.ADBase):
     # ------------------------------------------------------------------
     # Fixed price slots
     # ------------------------------------------------------------------
+    def _run_daily_local(self, callback, at: str, **cb_kwargs) -> None:
+        """Daily timer that stays on local wall-clock time across daylight-saving changes.
+
+        AppDaemon's run_daily re-arms by adding 24 h to the previous run while keeping the old UTC
+        offset, so after the clocks change every run lands an hour early (or late) until the app
+        restarts. The 00:01 price rebuild then ran at 23:01 and wiped tomorrow's prices. Here each
+        run computes the next local occurrence with parse_datetime (DST-correct) and arms a one-shot
+        run_at, so no extra checking timer is needed."""
+        now = self.ADapi.datetime(aware=True)
+        nxt = self.ADapi.parse_datetime(at, today=True, aware=True)
+        if nxt <= now:
+            nxt = self.ADapi.parse_datetime(at, today=True, aware=True, days_offset=1)
+        self.ADapi.run_at(self._daily_local_fire, nxt,
+                           daily_callback=callback, daily_at=at, daily_kwargs=cb_kwargs)
+
+    def _daily_local_fire(self, kwargs) -> None:
+        # Re-arm first so a failing callback cannot end the daily chain.
+        cb_kwargs = kwargs['daily_kwargs']
+        self._run_daily_local(kwargs['daily_callback'], kwargs['daily_at'], **cb_kwargs)
+        kwargs['daily_callback'](dict(cb_kwargs))
+
+    def _create_daily_prices_cb(self, kwargs) -> None:
+        self._create_daily_prices_with_taxes(**kwargs)
+
     def _create_daily_prices_with_taxes(self, **kwargs) -> None:
         price = kwargs['price']
         tomorrow = kwargs['tomorrow']
