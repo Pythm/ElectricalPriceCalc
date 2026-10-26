@@ -2,7 +2,7 @@
 
 A Python app that fetches electricity prices from [Nordpool](https://www.nordpoolgroup.com/) and calculates optimal charging times and energy-saving opportunities for your electric equipment.
 
-> 🤖 **Set up with an AI assistant:** the [LLM guide](https://github.com/Pythm/Pythm_AppdaemonApps/blob/master/LLM_GUIDE.md) helps an AI assistant find your own entity ids in Home Assistant and write the configuration.
+> 🤖 **Set up with an AI assistant:** the [LLM guide](https://github.com/Pythm/Pythm_AppdaemonApps/blob/master/LLM_GUIDE.md) helps an AI assistant find your own entity ids in Home Assistant and write the configuration. This app has its own notes for the assistant in [LLM.md](LLM.md).
 
 ---
 
@@ -45,12 +45,14 @@ pip install -r requirements.txt
 
 ## 🛠️ Installation & Configuration
 
+This app is **not in HACS**. Install it with `git clone`. It is used by [ad-ElectricalManagement](https://github.com/Pythm/ad-ElectricalManagement) and by `appliance_home_connect` and `log_energy_usage` in [Pythm_AppdaemonApps](https://github.com/Pythm/Pythm_AppdaemonApps); each of them names this app in its own configuration and lists it under `dependencies`.
+
 1. **Clone the repository** into your [AppDaemon](https://appdaemon.readthedocs.io/en/latest/) `apps` directory:
    ```bash
    git clone https://github.com/Pythm/ElectricalPriceCalc.git /path/to/appdaemon/apps/
    ```
 
-2. **Configure the app** in your AppDaemon configuration file (`.yaml` or `.toml`):
+2. **Choose ONE price source** and configure the app in your AppDaemon configuration file (`.yaml` or `.toml`). Examples for the other two sources are below the first one.
 
 ```yaml
 electricalPriceCalc:
@@ -91,6 +93,34 @@ electricalPriceCalc:
   support_amount: 0.9          # Percentage of support (e.g., 90%) (optional)
 ```
 
+Fixed price (for example Norgespris in Norway, VAT included in the price):
+
+```yaml
+electricalPriceCalc:
+  module: electricalPriceCalc
+  class: ElectricalPriceCalc
+  fixedprice: 0.50       # per kWh, used as given
+  currency: 'NOK'
+  country_code: 'NO'
+  daytax: 0.4613         # a number or a dict with months 1-12
+  nighttax: 0.2329
+  additional_tax: 0.034
+```
+
+Prices from the Home Assistant Nordpool integration (leave out `nordpool` to use the first sensor with `nordpool` in its name):
+
+```yaml
+electricalPriceCalc:
+  module: electricalPriceCalc
+  class: ElectricalPriceCalc
+  nordpool: sensor.nordpool_kwh_no5_nok_3_10_025   # needs raw_today, raw_tomorrow, tomorrow_valid, currency
+  country_code: 'NO'
+  daytax: 0.4613
+  nighttax: 0.2329
+```
+
+Apps that use the prices name this app in their own configuration, for example `electricalPriceApp: electricalPriceCalc` in ElectricalManagement, and list `electricalPriceCalc` under `dependencies`.
+
 ---
 
 ## 📌 Notes
@@ -103,11 +133,14 @@ electricalPriceCalc:
 - Days with 23 or 25 hours (daylight saving) produce 23 or 25 hourly slots with the correct local times.
 - The daily price refresh (00:01 and 13:00) stays on local clock time across daylight-saving changes. AppDaemon's own `run_daily` drifts by an hour after a change until the app restarts, which made the 00:01 rebuild run at 23:01 and remove tomorrow's prices.
 - Price fetching for `pricearea` runs in the background and is retried every 30 minutes on failure (one retry timer at a time).
-- `VAT` is specified as a multiplier (e.g., 1.25 represents 25% VAT) and is applied only to Nordpool Price before adding the other taxes.
+- `VAT` is specified as a multiplier (e.g., 1.25 represents 25% VAT) and is applied only to the raw prices fetched with `pricearea` (default 1.25 there, 0 otherwise), before adding the other taxes. A `nordpool` sensor already includes VAT, so `VAT` is ignored there too.
+- `currency` is only a label (default `EUR`); nothing is converted. With a `nordpool` sensor the sensor's own currency is used.
 - Taxes and thresholds are optional and can be customized based on your region.
 - Add tax per kWh from your electricity grid provider with `daytax` and `nighttax`. Night tax applies from 22:00 to 06:00 on workdays and all day on weekends and hollidays. Can be a float or a dict with month number and tax like example above.
 - In Norway, we receive 90% electricity support (Strømstøtte) on electricity prices above 0.70 kr exclusive / 0.9125 kr inclusive VAT (MVA) calculated per hour. Define `power_support_above` and `support_amount` to have calculations take the support into account. Do not define if not applicable.
 - In Norway, we can also choose **“Norgespris,”** a fixed‑price option. Configure the price with `fixedprice` instead of `pricearea`. If you are in an area with a fixed electricity price and only want to use [ad‑ElectricalManagement](https://github.com/Pythm/ad-ElectricalManagement) to stay below a maximum kW per‑hour usage, this setting is the right choice.
+- `electricity_price_now()` and the search methods return `None` (or `(None, None, None)`) when no price is available, for example right after a restart. Between 06:00 and 15:00, without tomorrow's prices, `get_Continuous_Cheapest_Time` returns only the price: `(None, None, price)`.
+
 ---
 
 ## ✅ Contributing
