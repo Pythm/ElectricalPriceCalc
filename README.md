@@ -45,7 +45,7 @@ pip install -r requirements.txt
 
 ## 🛠️ Installation & Configuration
 
-This app is **not in HACS**. Install it with `git clone`. It is used by [ad-ElectricalManagement](https://github.com/Pythm/ad-ElectricalManagement) and by `appliance_home_connect` and `log_energy_usage` in [Pythm_AppdaemonApps](https://github.com/Pythm/Pythm_AppdaemonApps); each of them names this app in its own configuration and lists it under `dependencies`.
+Install this app with `git clone`. It is used by [ad-ElectricalManagement](https://github.com/Pythm/ad-ElectricalManagement) and by `appliance_home_connect` and `log_energy_usage` in [Pythm_AppdaemonApps](https://github.com/Pythm/Pythm_AppdaemonApps); each of them names this app in its own configuration and lists it under `dependencies`.
 
 1. **Clone the repository** into your [AppDaemon](https://appdaemon.readthedocs.io/en/latest/) `apps` directory:
    ```bash

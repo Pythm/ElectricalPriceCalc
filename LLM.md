@@ -6,7 +6,7 @@ Read this with [README.md](README.md). The workflow for finding the user's real 
 
 Builds the electricity price list for today and tomorrow (spot price + VAT + day/night grid tax + extra tax - optional power support) and answers questions from other apps: cheapest continuous hours for charging, hours to save in, hours to spend in. It controls nothing and sends no events. Other apps read it with `get_app('<its app name>')`.
 
-Needs: [ElectricalManagement](https://github.com/Pythm/ad-ElectricalManagement) and two apps in [Pythm_AppdaemonApps](https://github.com/Pythm/Pythm_AppdaemonApps) (`appliance_home_connect`, `log_energy_usage`) use it. Alone it does nothing visible. Not in HACS: install by `git clone`.
+Needs: [ElectricalManagement](https://github.com/Pythm/ad-ElectricalManagement) and two apps in [Pythm_AppdaemonApps](https://github.com/Pythm/Pythm_AppdaemonApps) (`appliance_home_connect`, `log_energy_usage`) use it. Alone it does nothing visible. Install by `git clone`.
 
 ## Setting it up (steps for the assistant)
 
